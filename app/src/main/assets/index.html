@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Price Scanner</title>
+<script src="zxing.min.js"></script>
+<script src="xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#f4f6f5; --card:#fff; --ink:#14201d; --muted:#61706c; --line:#e3e8e6;
+  --brand:#0f766e; --brand-2:#0d9488; --brand-soft:#e6f4f2; --warn:#b45309; --warn-soft:#fef3e2;
+  --danger:#b91c1c; --danger-soft:#fdecec; --radius:16px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Roboto,sans-serif;font-size:16px}
+button,input,select,textarea{font:inherit;color:inherit}
+header{position:sticky;top:0;z-index:5;background:var(--brand);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:18px;margin:0;font-weight:700}
+header button{background:rgba(255,255,255,.15);border:0;color:#fff;border-radius:10px;padding:7px 12px;font-size:13px;font-weight:600}
+main{padding:14px 14px 170px;max-width:560px;margin:0 auto}
+.view{display:none}.view.active{display:block}
+.card{background:var(--card);border-radius:var(--radius);padding:16px;border:1px solid var(--line);margin-bottom:14px}
+.seg{display:flex;background:#e7ecea;border-radius:12px;padding:4px;margin-bottom:12px}
+.seg button{flex:1;border:0;background:transparent;padding:10px;border-radius:9px;font-weight:600;color:var(--muted)}
+.seg button.on{background:#fff;color:var(--brand);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.cam{position:relative;border-radius:20px;overflow:hidden;background:#0b1513;aspect-ratio:4/3;margin-bottom:10px}
+.cam video{width:100%;height:100%;object-fit:cover;display:block}
+.cam .aim{position:absolute;left:10%;right:10%;top:30%;bottom:30%;border:3px solid rgba(255,255,255,.9);border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.35);transition:border-color .15s}
+.cam .aim.hit{border-color:#4ade80}
+.cam .laser{position:absolute;left:12%;right:12%;top:50%;height:2px;background:#f43f5e;box-shadow:0 0 8px #f43f5e;animation:las 1.6s ease-in-out infinite}
+@keyframes las{0%,100%{transform:translateY(-28px)}50%{transform:translateY(28px)}}
+.cam .ctl{position:absolute;right:10px;top:10px;display:flex;gap:8px;z-index:2}
+.cam .ctl button{border:0;background:rgba(0,0,0,.55);color:#fff;border-radius:999px;padding:8px 12px;font-size:13px;font-weight:600}
+.cam .msg{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;text-align:center;padding:20px;gap:12px}
+.cam .msg button{border:0;background:#2dd4bf;color:#06302b;font-weight:800;border-radius:14px;padding:16px 26px;font-size:18px}
+.cam .msg small{opacity:.8}
+.row{display:flex;gap:8px;align-items:center}
+.input{width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:12px;background:#fff;font-size:16px;outline:none}
+.input:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+.btn{border:0;border-radius:12px;padding:12px 16px;font-weight:600;background:var(--brand);color:#fff;white-space:nowrap}
+.btn.ghost{background:var(--brand-soft);color:var(--brand)}
+.btn.plain{background:#eef1f0;color:var(--ink)}
+.btn.danger{background:var(--danger-soft);color:var(--danger)}
+.btn.block{width:100%;display:block;padding:14px}
+.btn:disabled{opacity:.5}
+.label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:0 0 6px}
+.result{animation:pop .15s ease-out}
+@keyframes pop{from{transform:scale(.98);opacity:.6}to{transform:none;opacity:1}}
+.result .price{font-size:40px;font-weight:800;color:var(--brand);margin:4px 0 0}
+.result .name{font-size:19px;font-weight:700;margin:0}
+.result .meta{color:var(--muted);font-size:14px;margin-top:2px}
+.result .code{font-family:monospace;font-size:13px;color:var(--muted);margin-top:6px}
+.result.miss{border-color:#f5d9a8;background:var(--warn-soft)}
+.result.miss .name{color:var(--warn)}
+.actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.actions .btn{flex:1}
+.list{list-style:none;margin:0;padding:0}
+.item{display:flex;align-items:center;gap:12px;padding:12px 2px;border-bottom:1px solid var(--line)}
+.item:last-child{border-bottom:0}
+.item .grow{flex:1;min-width:0}
+.item .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .s{font-size:13px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .p{font-weight:700;font-variant-numeric:tabular-nums}
+.badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;background:var(--warn-soft);color:var(--warn);margin-left:6px;vertical-align:1px}
+.badge.ok{background:var(--brand-soft);color:var(--brand)}
+.stepper{display:flex;align-items:center;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.stepper button{border:0;background:#f3f5f4;width:36px;height:36px;font-size:18px;font-weight:700}
+.stepper span{min-width:30px;text-align:center;font-weight:600}
+.total{display:flex;justify-content:space-between;align-items:baseline}
+.total .big{font-size:36px;font-weight:800;color:var(--brand);font-variant-numeric:tabular-nums}
+.change{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
+.change b{font-size:22px;font-variant-numeric:tabular-nums}
+.cashgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
+.cashgrid button{border:1px solid var(--line);background:#fff;border-radius:10px;padding:11px 0;font-weight:700}
+.empty{text-align:center;color:var(--muted);padding:24px 8px;font-size:15px}
+nav{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);display:flex;padding:6px;z-index:6}
+nav button{flex:1;border:0;background:transparent;padding:8px 4px;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:12px;font-weight:600;color:var(--muted);position:relative}
+nav button svg{width:24px;height:24px}
+nav button.on{color:var(--brand)}
+nav .count{position:absolute;top:2px;left:calc(50% + 6px);background:var(--danger);color:#fff;font-size:11px;border-radius:999px;padding:1px 6px}
+.posbar{position:fixed;left:0;right:0;bottom:62px;z-index:6;padding:0 12px 8px;display:none}
+.posbar.show{display:block}
+.posbar .in{max-width:536px;margin:0 auto;background:#14201d;color:#fff;border-radius:16px;padding:10px 10px 10px 16px;display:flex;align-items:center;gap:12px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.posbar .amt{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}
+.posbar .n{font-size:12px;opacity:.75}
+.posbar .btn{margin-left:auto;background:#2dd4bf;color:#06302b;padding:12px 18px;font-size:16px}
+.sheet-bg{position:fixed;inset:0;background:rgba(10,20,18,.45);z-index:20;display:none;align-items:flex-end;justify-content:center}
+.sheet-bg.open{display:flex}
+.sheet{background:#fff;width:100%;max-width:560px;border-radius:22px 22px 0 0;padding:18px 16px 22px;max-height:88vh;overflow:auto}
+.sheet h2{margin:0 0 12px;font-size:19px}
+.field{margin-bottom:12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.toast{position:fixed;left:50%;bottom:150px;transform:translateX(-50%);background:#14201d;color:#fff;padding:11px 16px;border-radius:12px;font-size:14px;z-index:30;display:none;align-items:center;gap:14px;max-width:92vw}
+.toast.show{display:flex}
+.toast button{background:transparent;border:0;color:#5eead4;font-weight:700}
+.hint{font-size:13px;color:var(--muted);line-height:1.45}
+textarea.input{min-height:120px;font-family:monospace;font-size:13px}
+.sectionhead{display:flex;justify-content:space-between;align-items:center;margin:4px 2px 10px}
+.sectionhead h2{font-size:17px;margin:0}
+.salebox .line{display:flex;justify-content:space-between;padding:4px 0;font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Price Scanner</h1>
+  <button id="sheetBtn">⟳ Sheet</button>
+</header>
+
+<main>
+  <section class="view active" id="view-scan">
+    <div class="seg">
+      <button id="modeCart" class="on">Sell (POS)</button>
+      <button id="modeCheck">Price check</button>
+    </div>
+    <div class="cam" id="cam">
+      <video id="video" playsinline muted></video>
+      <div class="aim" id="aim" style="display:none"></div>
+      <div class="laser" id="laser" style="display:none"></div>
+      <div class="ctl" id="camCtl" style="display:none"><button id="torchBtn" style="display:none">🔦 Light</button><button id="stopBtn">Pause</button></div>
+      <div class="msg" id="camMsg"><button id="startBtn">▶ Start scanning</button><small id="camSub">Point the camera at a barcode — it scans automatically</small></div>
+    </div>
+    <div id="resultBox"></div>
+    <div class="card" id="saleOnScan" style="padding:6px 14px;display:none">
+      <div class="sectionhead" style="margin:8px 0 2px"><h2 style="font-size:15px">Current sale</h2><button class="btn plain" id="saleOnScanClear" style="padding:6px 12px;font-size:13px">Clear</button></div>
+      <ul class="list" id="saleOnScanList"></ul>
+    </div>
+    <div class="card">
+      <p class="label">Type barcode or search product</p>
+      <form class="row" id="manualForm">
+        <input class="input" id="manualInput" inputmode="search" autocomplete="off" placeholder="e.g. 4800016… or “crunch”">
+        <button class="btn" type="submit">Go</button>
+      </form>
+      <ul class="list" id="manualResults"></ul>
+    </div>
+  </section>
+
+  <section class="view" id="view-cart">
+    <div class="card">
+      <div class="total"><span class="label" style="margin:0">Total</span><span class="big" id="cartTotal">₱0.00</span></div>
+      <div class="hint" id="cartCount">0 items</div>
+    </div>
+    <div class="card" style="padding:6px 14px"><ul class="list" id="cartList"></ul></div>
+    <div class="card">
+      <p class="label">Cash received</p>
+      <input class="input" id="cashInput" inputmode="decimal" placeholder="₱0.00">
+      <div class="cashgrid" id="cashGrid">
+        <button data-cash="exact">Exact</button><button data-cash="20">₱20</button><button data-cash="50">₱50</button><button data-cash="100">₱100</button>
+        <button data-cash="200">₱200</button><button data-cash="500">₱500</button><button data-cash="1000">₱1000</button><button data-cash="clear">Clear</button>
+      </div>
+      <div class="change"><span class="label" style="margin:0">Change</span><b id="changeOut">—</b></div>
+      <button class="btn block" id="completeSale" style="margin-top:14px;font-size:17px">Complete sale</button>
+    </div>
+    <div class="row">
+      <button class="btn ghost block" id="cartScan">Scan more</button>
+      <button class="btn danger block" id="cartClear">Cancel sale</button>
+    </div>
+    <div class="card salebox" style="margin-top:14px">
+      <div class="sectionhead" style="margin:0 0 6px"><h2 style="font-size:16px">Today’s sales</h2><span class="hint" id="todayCount"></span></div>
+      <div class="total"><span class="hint">Total sold today</span><b style="font-size:22px" id="todayTotal">₱0.00</b></div>
+      <div id="todayList" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-products">
+    <div class="sectionhead"><h2 id="prodHead">Products</h2>
+      <div class="row"><button class="btn plain" id="importBtn">Paste</button><button class="btn" id="addBtn">+ Add</button></div>
+    </div>
+    <input class="input" id="prodSearch" placeholder="Search products" style="margin-bottom:12px">
+    <div class="card" style="padding:6px 14px"><ul class="list" id="prodList"></ul></div>
+    <button class="btn ghost block" id="exportBtn">Copy to spreadsheet</button>
+    <p class="hint" style="margin-top:8px">Copies every product with its learned barcode, in the same columns as your Google Sheet.</p>
+  </section>
+</main>
+
+<nav>
+  <button data-view="scan" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M15 8v8"/></svg>Scan</button>
+  <button data-view="cart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.6 12.2a2 2 0 0 0 2 1.6h8.2a2 2 0 0 0 2-1.5L22 7H6"/></svg>Sale<span class="count" id="navCount" style="display:none">0</span></button>
+  <button data-view="products"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Products</button>
+</nav>
+<div class="posbar" id="posbar"><div class="in"><div><div class="amt" id="posAmt">₱0.00</div><div class="n" id="posN">0 items</div></div><button class="btn" id="posCheckout">Checkout</button></div></div>
+<div class="sheet-bg" id="sheetBg"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"><span id="toastMsg"></span><button id="toastAct"></button></div>
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const peso = n => '₱' + (Number(n)||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+const normCode = c => { c = String(c||'').replace(/^'/,'').replace(/\s+/g,''); return /^\d+$/.test(c) ? c.replace(/^0+/,'') : c.toUpperCase(); };
+const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const Native = window.AndroidBridge || null;
+
+const DEFAULT_SHEET = 'https://docs.google.com/spreadsheets/d/1tOiHB7rskT5rGSRODJthd3-Ta3gfkFumKbKEYt8nqmo/edit?usp=sharing';
+const SHEET_DEFAULTS = [
+  {id:'super-crunch-cheese',category:'Snacks',name:'Super Crunch Cheese',brand:'Super Crunch',size:'55g (box of 50)',qty:50,cost:9.83,price:13,barcode:''},
+  {id:'super-crunch-sweetcorn',category:'Snacks',name:'Super Crunch Sweetcorn',brand:'Super Crunch',size:'55g (box of 55)',qty:55,cost:8.93,price:12,barcode:''}
+];
+const ls = {
+  get(k,d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } },
+  set(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+
+let products = ls.get('ps_products', null) || SHEET_DEFAULTS.slice();
+let cart = ls.get('ps_cart', []);
+let sales = ls.get('ps_sales', []);
+let scanMode = ls.get('ps_mode','cart');
+let sheetUrl = ls.get('ps_sheet', DEFAULT_SHEET);
+let lastSync = ls.get('ps_lastsync', 0);
+let lastTabs = [];
+let editTarget = null; // input element that receives the next scanned code (edit form)
+
+function persist(){ ls.set('ps_products', products); }
+function saveProduct(p){
+  const rec = {id:p.id, name:p.name||'', brand:p.brand||'', size:p.size||'', category:p.category||'', qty:p.qty===''||p.qty==null?null:Number(p.qty), price:Number(p.price)||0, cost:p.cost===''||p.cost==null?null:Number(p.cost), barcode:String(p.barcode||'').trim()};
+  const i = products.findIndex(x => x.id===p.id);
+  if (i>=0) products[i] = rec; else products.push(rec);
+  persist(); renderAll(); return rec;
+}
+function deleteProduct(id){ products = products.filter(p => p.id!==id); persist(); renderAll(); }
+
+const byId = id => products.find(p => p.id===id);
+const codesOf = p => String(p.barcode||'').split(/[,;\s]+/).filter(Boolean);
+const byCode = code => { const n = normCode(code); return n ? products.find(p => codesOf(p).some(b => normCode(b)===n)) : null; };
+const sortP = list => list.slice().sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+function search(q){
+  q = q.trim().toLowerCase(); if (!q) return sortP(products);
+  const words = q.split(/\s+/);
+  return sortP(products.filter(p => { const hay = [p.name,p.brand,p.size,p.category,p.barcode].join(' ').toLowerCase(); return words.every(w => hay.includes(w)); }));
+}
+
+// ---------------- Feedback ----------------
+let actx = null;
+function beep(ok=true){
+  try{
+    actx = actx || new (window.AudioContext||window.webkitAudioContext)();
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = 'square'; o.frequency.value = ok ? 1800 : 400;
+    g.gain.setValueAtTime(0.08, actx.currentTime); g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + (ok?0.12:0.3));
+    o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + (ok?0.13:0.32));
+  }catch(e){}
+  try{ navigator.vibrate && navigator.vibrate(ok?50:[60,60,60]); }catch(e){}
+}
+
+// ---------------- Live scanner ----------------
+let stream = null, scanning = false, detector = null, zx = null, loopTimer = null;
+let lastCode = '', lastAt = 0;
+const video = $('#video');
+const canvas = document.createElement('canvas');
+const cctx = canvas.getContext('2d', {willReadFrequently:true});
+
+async function setupDecoders(){
+  if (detector === null){
+    detector = false;
+    try{
+      if ('BarcodeDetector' in window){
+        const f = await BarcodeDetector.getSupportedFormats();
+        if (f && f.length) detector = new BarcodeDetector({formats: f});
+      }
+    }catch(e){ detector = false; }
+  }
+  if (!zx && window.ZXing){
+    const Z = window.ZXing, hints = new Map();
+    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.EAN_13,Z.BarcodeFormat.EAN_8,Z.BarcodeFormat.UPC_A,Z.BarcodeFormat.UPC_E,Z.BarcodeFormat.CODE_128,Z.BarcodeFormat.CODE_39,Z.BarcodeFormat.CODE_93,Z.BarcodeFormat.ITF,Z.BarcodeFormat.CODABAR,Z.BarcodeFormat.QR_CODE]);
+    hints.set(Z.DecodeHintType.TRY_HARDER, true);
+    zx = new Z.MultiFormatReader(); zx.setHints(hints);
+  }
+}
+
+async function startScan(){
+  if (scanning) return;
+  $('#camSub').textContent = 'Starting camera…';
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}}, audio:false});
+  }catch(e){
+    $('#camSub').textContent = 'Camera blocked. Allow camera for Price Scanner in your phone Settings → Apps → Price Scanner → Permissions, then tap Start again.';
+    return;
+  }
+  video.srcObject = stream;
+  try{ await video.play(); }catch(e){}
+  await setupDecoders();
+  scanning = true;
+  $('#camMsg').style.display = 'none'; $('#aim').style.display = ''; $('#laser').style.display = ''; $('#camCtl').style.display = '';
+  const track = stream.getVideoTracks()[0];
+  try{
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    $('#torchBtn').style.display = caps.torch ? '' : 'none';
+    if (caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
+  }catch(e){}
+  loop();
+}
+function stopScan(msg){
+  scanning = false; clearTimeout(loopTimer);
+  if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+  torchOn = false; $('#torchBtn').textContent = '🔦 Light';
+  video.srcObject = null;
+  $('#camMsg').style.display = ''; $('#aim').style.display = 'none'; $('#laser').style.display = 'none'; $('#camCtl').style.display = 'none';
+  $('#camSub').textContent = msg || 'Point the camera at a barcode — it scans automatically';
+}
+let torchOn = false;
+$('#torchBtn').addEventListener('click', () => {
+  if (!stream) return; torchOn = !torchOn;
+  stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:torchOn}]}).catch(()=>{});
+  $('#torchBtn').textContent = torchOn ? '🔦 Off' : '🔦 Light';
+});
+
+async function decodeFrame(){
+  if (!video.videoWidth) return null;
+  if (detector){
+    try{ const r = await detector.detect(video); if (r && r.length) return r[0].rawValue; }catch(e){}
+    return null;
+  }
+  if (!zx) return null;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const sw = vw*0.8, sh = vh*0.5, sx = (vw-sw)/2, sy = (vh-sh)/2;
+  const scale = Math.min(1, 900/sw);
+  canvas.width = Math.round(sw*scale); canvas.height = Math.round(sh*scale);
+  cctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+  try{
+    const Z = window.ZXing;
+    const r = zx.decodeWithState(new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(canvas))));
+    return r ? r.getText() : null;
+  }catch(e){ return null; }
+}
+async function loop(){
+  if (!scanning) return;
+  let code = null;
+  try{ code = await decodeFrame(); }catch(e){}
+  if (code){
+    const now = Date.now();
+    if (!(code === lastCode && now - lastAt < 2500)){
+      lastCode = code; lastAt = now;
+      $('#aim').classList.add('hit'); setTimeout(() => $('#aim').classList.remove('hit'), 300);
+      handleCode(code);
+    } else lastAt = now;
+  }
+  loopTimer = setTimeout(loop, detector ? 120 : 60);
+}
+
+function handleCode(code){
+  if (editTarget){
+    const t = editTarget;
+    t.value = t.value.trim() ? t.value.trim() + ', ' + code : code;
+    beep(true); toast('Barcode added'); editTarget = null; reopenEdit && reopenEdit(); return;
+  }
+  const p = byCode(code);
+  beep(!!p);
+  if (p && scanMode==='cart') addToCart(p.id);
+  showResult(p, code);
+}
+
+document.addEventListener('visibilitychange', () => { if (document.hidden && scanning) stopScan(); });
+
+// ---------------- Result card ----------------
+function showResult(p, code){
+  const box = $('#resultBox');
+  if (p){
+    box.innerHTML = `<div class="card result">
+      <p class="label">${scanMode==='cart' ? '✓ Added to sale' : 'Price'}</p>
+      <p class="name">${esc(p.name)}</p>
+      <div class="meta">${esc([p.brand,p.size].filter(Boolean).join(' · '))}</div>
+      <div class="price">${peso(p.price)}</div>
+      <div class="actions">
+        ${scanMode==='cart' ? `<button class="btn" data-act="checkout">Checkout · ${peso(cartTotal())}</button>` : `<button class="btn" data-act="add">Add to sale</button>`}
+        <button class="btn plain" data-act="edit">Edit</button>
+      </div></div>`;
+    box.querySelector('[data-act="add"]')?.addEventListener('click', () => { addToCart(p.id); toast(`Added ${p.name}`); });
+    box.querySelector('[data-act="checkout"]')?.addEventListener('click', () => go('cart'));
+    box.querySelector('[data-act="edit"]').addEventListener('click', () => openEdit(p));
+  } else {
+    box.innerHTML = `<div class="card result miss">
+      <p class="label">Not in your list yet</p>
+      <p class="name">Unknown barcode</p>
+      <div class="code">${esc(code)}</div>
+      <p class="hint" style="margin:8px 0 0">Link it once and it’s recognised from now on.</p>
+      <div class="actions">
+        <button class="btn" data-act="link">Link to product</button>
+        <button class="btn ghost" data-act="new">New product</button>
+      </div></div>`;
+    box.querySelector('[data-act="link"]').addEventListener('click', () => openLink(code));
+    box.querySelector('[data-act="new"]').addEventListener('click', () => openEdit({id:newId(),barcode:code,name:'',brand:'',size:'',category:'',price:'',cost:'',qty:''}, true));
+  }
+}
+
+// ---------------- Cart ----------------
+function saveCart(){ ls.set('ps_cart', cart); }
+function addToCart(id, n=1){
+  const l = cart.find(x => x.id===id);
+  if (l) l.qty += n; else cart.push({id, qty:n});
+  cart = cart.filter(x => x.qty>0); saveCart(); renderCart();
+}
+function cartTotal(){ return cart.reduce((s,l) => { const p = byId(l.id); return s + (p ? (Number(p.price)||0)*l.qty : 0); }, 0); }
+function renderCart(){
+  const lines = cart.filter(l => byId(l.id));
+  const count = lines.reduce((s,l)=>s+l.qty,0);
+  $('#cartTotal').textContent = peso(cartTotal());
+  $('#cartCount').textContent = count + (count===1?' item':' items');
+  const nc = $('#navCount'); nc.style.display = count ? '' : 'none'; nc.textContent = count;
+  const lineHtml = l => { const p = byId(l.id); return `<li class="item"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s">${l.qty} × ${peso(p.price)}</div></div><div class="stepper"><button data-dec="${esc(l.id)}">−</button><span>${l.qty}</span><button data-inc="${esc(l.id)}">+</button></div><div class="p" style="min-width:72px;text-align:right">${peso(p.price*l.qty)}</div></li>`; };
+  $('#cartList').innerHTML = lines.length ? lines.map(lineHtml).join('') : `<li class="empty">No items yet. Go to <b>Scan</b> and scan products.</li>`;
+  $('#saleOnScan').style.display = scanMode==='cart' && lines.length ? '' : 'none';
+  $('#saleOnScanList').innerHTML = lines.slice().reverse().map(lineHtml).join('');
+  const onCart = $('#view-cart').classList.contains('active');
+  $('#posbar').classList.toggle('show', !!count && !onCart);
+  $('#posAmt').textContent = peso(cartTotal()); $('#posN').textContent = count + (count===1?' item':' items');
+  updateChange();
+}
+function updateChange(){
+  const cash = parseFloat(($('#cashInput').value||'').replace(/[^\d.]/g,''));
+  const t = cartTotal(), out = $('#changeOut');
+  if (!cash){ out.textContent = '—'; out.style.color=''; return; }
+  const c = cash - t; out.textContent = c<0 ? 'Short ' + peso(-c) : peso(c); out.style.color = c<0 ? 'var(--danger)' : 'var(--brand)';
+}
+
+// ---------------- Sales ----------------
+const startOfToday = () => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); };
+function renderSales(){
+  const today = sales.filter(x => x.at >= startOfToday()).sort((a,b)=>b.at-a.at);
+  $('#todayTotal').textContent = peso(today.reduce((s,x)=>s+(x.total||0),0));
+  $('#todayCount').textContent = today.length + (today.length===1?' sale':' sales');
+  $('#todayList').innerHTML = today.slice(0,20).map(x => `<div class="line"><span>${new Date(x.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})} · ${x.count} item${x.count===1?'':'s'}</span><span>${peso(x.total)}</span></div>`).join('') || '<div class="hint">No completed sales yet today.</div>';
+}
+function completeSale(){
+  const lines = cart.filter(l => byId(l.id));
+  if (!lines.length){ toast('No items in this sale'); return; }
+  const total = cartTotal();
+  const cash = parseFloat(($('#cashInput').value||'').replace(/[^\d.]/g,''));
+  if (cash && cash < total){ toast('Cash is less than the total'); return; }
+  const sale = { at: Date.now(), total: Math.round(total*100)/100, count: lines.reduce((s,l)=>s+l.qty,0), cash: cash||null, change: cash ? Math.round((cash-total)*100)/100 : null,
+    items: lines.map(l => { const p = byId(l.id); return {name:p.name, price:Number(p.price)||0, qty:l.qty}; }) };
+  sales.push(sale); sales = sales.filter(x => x.at > Date.now() - 60*86400000); ls.set('ps_sales', sales);
+  cart = []; saveCart(); $('#cashInput').value=''; renderCart(); renderSales();
+  openSheet(`<h2>Sale complete ✓</h2><div class="salebox">${sale.items.map(i => `<div class="line"><span>${i.qty} × ${esc(i.name)}</span><span>${peso(i.price*i.qty)}</span></div>`).join('')}
+    <div class="line" style="border-top:1px dashed var(--line);margin-top:6px;padding-top:8px;font-weight:700"><span>Total</span><span>${peso(sale.total)}</span></div>
+    ${sale.cash?`<div class="line"><span>Cash</span><span>${peso(sale.cash)}</span></div><div class="line" style="font-size:20px;font-weight:800;color:var(--brand)"><span>Change</span><span>${peso(sale.change)}</span></div>`:''}</div>
+    <button class="btn block" id="nextSale" style="margin-top:14px">Next customer</button>`);
+  $('#nextSale').addEventListener('click', () => { closeSheet(); setMode('cart'); go('scan'); $('#resultBox').innerHTML=''; startScan(); });
+}
+
+// ---------------- Lists ----------------
+function renderProducts(){
+  const list = search($('#prodSearch').value);
+  $('#prodHead').textContent = `Products (${products.length})`;
+  $('#prodList').innerHTML = list.length ? list.map(p => `
+    <li class="item" data-id="${esc(p.id)}"><div class="grow"><div class="t">${esc(p.name)||'(no name)'}${p.barcode?'<span class="badge ok">barcode</span>':'<span class="badge">no barcode</span>'}</div>
+    <div class="s">${esc([p.brand,p.size,p.category].filter(Boolean).join(' · '))}</div></div><div class="p">${peso(p.price)}</div></li>`).join('')
+    : `<li class="empty">${products.length?'No matches.':'No products yet. Tap ⟳ Sheet to load your Google Sheet.'}</li>`;
+}
+function renderManual(){
+  const q = $('#manualInput').value.trim(), ul = $('#manualResults');
+  if (!q || /^\d{6,}$/.test(q)){ ul.innerHTML=''; return; }
+  ul.innerHTML = search(q).slice(0,8).map(p => `<li class="item" data-id="${esc(p.id)}"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s">${esc([p.brand,p.size].filter(Boolean).join(' · '))}</div></div><div class="p">${peso(p.price)}</div></li>`).join('') || '<li class="empty">No matching product.</li>';
+}
+function renderAll(){ renderProducts(); renderCart(); renderManual(); }
+
+// ---------------- Dialogs ----------------
+let reopenEdit = null;
+function openSheet(html){ $('#sheet').innerHTML = html; $('#sheetBg').classList.add('open'); }
+function closeSheet(){ $('#sheetBg').classList.remove('open'); }
+$('#sheetBg').addEventListener('click', e => { if (e.target.id==='sheetBg') { closeSheet(); editTarget = null; } });
+
+function openLink(code){
+  openSheet(`<h2>Link barcode to a product</h2>
+    <div class="hint" style="font-family:monospace;margin-bottom:10px">${esc(code)}</div>
+    <input class="input" id="linkSearch" placeholder="Search products" style="margin-bottom:8px">
+    <ul class="list" id="linkList"></ul>
+    <button class="btn plain block" id="linkCancel" style="margin-top:10px">Cancel</button>`);
+  const draw = () => { $('#linkList').innerHTML = search($('#linkSearch').value).map(p => `<li class="item" data-id="${esc(p.id)}"><div class="grow"><div class="t">${esc(p.name)}${p.barcode?'<span class="badge ok">has barcode</span>':''}</div><div class="s">${esc([p.brand,p.size].filter(Boolean).join(' · '))}</div></div><div class="p">${peso(p.price)}</div></li>`).join('') || '<li class="empty">No products.</li>'; };
+  draw();
+  $('#linkSearch').addEventListener('input', draw);
+  $('#linkCancel').addEventListener('click', closeSheet);
+  $('#linkList').addEventListener('click', e => {
+    const li = e.target.closest('.item'); if (!li) return;
+    const p = byId(li.dataset.id); if (!p) return;
+    const codes = codesOf(p); if (!codes.some(c => normCode(c)===normCode(code))) codes.push(code);
+    const upd = saveProduct({...p, barcode: codes.join(', ')});
+    closeSheet(); toast('Barcode linked ✓', 'Copy to sheet', exportRows);
+    if (scanMode==='cart') addToCart(upd.id);
+    showResult(upd, code);
+  });
+}
+
+function openEdit(p, isNew){
+  isNew = isNew || !byId(p.id);
+  const draft = {...p};
+  const render = () => {
+    openSheet(`<h2>${isNew?'New product':'Edit product'}</h2>
+    <form id="editForm">
+      <div class="field"><p class="label">Product name</p><input class="input" name="name" required value="${esc(draft.name)}"></div>
+      <div class="grid2">
+        <div class="field"><p class="label">Brand</p><input class="input" name="brand" value="${esc(draft.brand)}"></div>
+        <div class="field"><p class="label">Size / unit</p><input class="input" name="size" value="${esc(draft.size)}"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><p class="label">Selling price ₱</p><input class="input" name="price" inputmode="decimal" required value="${esc(draft.price)}"></div>
+        <div class="field"><p class="label">Cost price ₱</p><input class="input" name="cost" inputmode="decimal" value="${esc(draft.cost ?? '')}"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><p class="label">Category</p><input class="input" name="category" value="${esc(draft.category)}"></div>
+        <div class="field"><p class="label">Qty</p><input class="input" name="qty" inputmode="numeric" value="${esc(draft.qty ?? '')}"></div>
+      </div>
+      <div class="field"><p class="label">Barcode(s)</p>
+        <div class="row"><input class="input" name="barcode" inputmode="numeric" value="${esc(draft.barcode)}" placeholder="Scan or type"><button type="button" class="btn ghost" id="scanCodeBtn">Scan</button></div>
+        <p class="hint" style="margin:6px 0 0">Separate several barcodes with commas (e.g. single pack and box).</p></div>
+      <div class="actions">
+        <button class="btn" type="submit">Save</button>
+        ${isNew?'':'<button class="btn danger" type="button" id="delBtn">Delete</button>'}
+        <button class="btn plain" type="button" id="cancelBtn">Cancel</button>
+      </div>
+    </form>`);
+    const f = $('#editForm');
+    const grab = () => { ['name','brand','size','price','cost','category','qty','barcode'].forEach(k => draft[k] = f[k].value); };
+    $('#cancelBtn').addEventListener('click', closeSheet);
+    $('#scanCodeBtn').addEventListener('click', () => {
+      grab(); closeSheet(); go('scan');
+      editTarget = { get value(){ return draft.barcode||''; }, set value(v){ draft.barcode = v; } };
+      reopenEdit = () => { reopenEdit = null; render(); };
+      toast('Point the camera at the product’s barcode'); startScan();
+    });
+    $('#delBtn')?.addEventListener('click', () => {
+      const b = $('#delBtn');
+      if (b.dataset.sure){ deleteProduct(p.id); cart = cart.filter(l=>l.id!==p.id); saveCart(); closeSheet(); $('#resultBox').innerHTML=''; toast('Product deleted'); }
+      else { b.dataset.sure = 1; b.textContent = 'Tap again to delete'; }
+    });
+    f.addEventListener('submit', e => {
+      e.preventDefault(); grab();
+      const price = parseFloat(String(draft.price).replace(/[^\d.]/g,''));
+      if (isNaN(price)){ f.price.focus(); return; }
+      const clash = String(draft.barcode).split(/[,;\s]+/).filter(Boolean).map(byCode).find(x => x && x.id!==p.id);
+      if (clash && !f.dataset.ok){ f.dataset.ok = 1; toast(`That barcode is already on “${clash.name}”. Tap Save again to use it anyway.`); return; }
+      const num = v => { v = String(v??'').replace(/[^\d.]/g,''); return v==='' ? null : parseFloat(v); };
+      const upd = saveProduct({id:p.id, name:draft.name.trim(), brand:draft.brand.trim(), size:draft.size.trim(), category:draft.category.trim(), price, cost:num(draft.cost), qty:num(draft.qty), barcode:String(draft.barcode).trim()});
+      closeSheet(); toast(isNew ? 'Product added' : 'Saved', upd.barcode ? 'Copy to sheet' : '', upd.barcode ? exportRows : null);
+      if (isNew && scanMode==='cart' && $('#view-scan').classList.contains('active')) addToCart(upd.id);
+      if ($('#view-scan').classList.contains('active')) showResult(upd);
+    });
+  };
+  render();
+}
+
+// ---------------- Google Sheet sync ----------------
+function sheetXlsxUrl(u){
+  const m = String(u).match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  return m ? `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=xlsx` : null;
+}
+function fetchBase64(url){
+  return new Promise((res, rej) => {
+    if (Native && Native.fetchBase64){ const id = 'c' + (++cbN); cbs[id] = (ok, t) => ok ? res(t) : rej(new Error(t)); Native.fetchBase64(url, id); }
+    else fetch(url).then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP '+r.status))).then(b => { let s=''; const a=new Uint8Array(b); for (let i=0;i<a.length;i++) s+=String.fromCharCode(a[i]); res(btoa(s)); }, rej);
+  });
+}
+// Reads EVERY tab of the workbook and returns all product rows found.
+async function readAllTabs(){
+  const url = sheetXlsxUrl(sheetUrl);
+  if (!url || !window.XLSX) return null;
+  const b64 = await fetchBase64(url);
+  const wb = XLSX.read(b64, {type:'base64'});
+  const rows = [], tabs = [];
+  for (const name of wb.SheetNames){
+    const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], {blankrows:false});
+    const r = parseTable(csv);
+    if (r.rows.length){ tabs.push(`${name} (${r.rows.length})`); rows.push(...r.rows); }
+  }
+  return {rows, tabs, tabCount: wb.SheetNames.length};
+}
+function sheetCsvUrl(u){
+  const m = String(u).match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/); if (!m) return null;
+  const g = String(u).match(/[#&?]gid=(\d+)/);
+  return `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv${g ? '&gid='+g[1] : ''}`;
+}
+const cbs = {}; let cbN = 0;
+window.__nativeCb = (id, ok, text) => { const cb = cbs[id]; delete cbs[id]; cb && cb(ok, text); };
+function fetchText(url){
+  return new Promise((res, rej) => {
+    if (Native && Native.fetchText){ const id = 'c' + (++cbN); cbs[id] = (ok, t) => ok ? res(t) : rej(new Error(t)); Native.fetchText(url, id); }
+    else fetch(url).then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP '+r.status))).then(res, rej);
+  });
+}
+function parseTable(text){
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return {rows:[]};
+  const delim = lines[0].includes('\t') && !lines[0].includes(',') ? '\t' : (lines.some(l=>l.includes('\t')) ? '\t' : ',');
+  const split = l => {
+    if (delim==='\t') return l.split('\t');
+    const out = []; let cur = '', q = false;
+    for (let i=0;i<l.length;i++){ const ch = l[i];
+      if (q){ if (ch==='"' && l[i+1]==='"'){ cur+='"'; i++; } else if (ch==='"') q=false; else cur+=ch; }
+      else if (ch==='"') q=true; else if (ch===','){ out.push(cur); cur=''; } else cur+=ch; }
+    out.push(cur); return out;
+  };
+  const hi = lines.findIndex(l => { const c = split(l).map(x => x.trim().toLowerCase()); return c.some(x => x==='product' || x==='product name' || x==='item') && c.some(x => x.includes('price')); });
+  if (hi < 0) return {rows:[], error:'Couldn’t find the header row (needs a “Product” column and a “Selling Price” column).'};
+  const H = split(lines[hi]).map(h => h.trim().toLowerCase());
+  const col = (...keys) => H.findIndex(h => keys.some(k => h.includes(k)));
+  const ci = {category:col('category'), name:H.findIndex(h => h==='product'||h==='product name'||h==='item'), brand:col('brand'), size:col('size','unit'), qty:col('qty','quantity'), cost:col('cost'), price:col('selling','srp','retail'), barcode:col('barcode','upc','ean')};
+  if (ci.price < 0) ci.price = H.findIndex((h,i) => h.includes('price') && i!==ci.cost);
+  const num = v => { const n = parseFloat(String(v||'').replace(/[^\d.\-]/g,'')); return isNaN(n) ? null : n; };
+  const rows = [];
+  for (const l of lines.slice(hi+1)){
+    const c = split(l), g = i => i>=0 ? String(c[i]||'').trim() : '';
+    const name = g(ci.name), price = num(g(ci.price));
+    if (!name || price==null) continue;
+    rows.push({category:g(ci.category), name, brand:g(ci.brand), size:g(ci.size), qty:num(g(ci.qty)), cost:num(g(ci.cost)), price, barcode:g(ci.barcode).replace(/^'/,'').replace(/\.0+$/,'')});
+  }
+  return {rows};
+}
+function mergeRows(rows){
+  let added = 0, updated = 0;
+  const key = k => [k.name,k.brand,k.size].map(s=>String(s||'').trim().toLowerCase()).join('|');
+  for (const row of rows){
+    const existing = (row.barcode && byCode(row.barcode.split(/[,;\s]+/)[0])) || products.find(p => key(p)===key(row));
+    if (existing){
+      const keep = {...existing};
+      for (const [k,v] of Object.entries(row)) if (v!=='' && v!=null) keep[k] = v;
+      if (!row.barcode) keep.barcode = existing.barcode; // keep barcodes learned in the app
+      Object.assign(existing, keep); updated++;
+    } else { products.push({...row, id:newId()}); added++; }
+  }
+  persist(); renderAll();
+  return {added, updated};
+}
+async function syncSheet(silent){
+  const url = sheetCsvUrl(sheetUrl);
+  if (!url){ if (!silent) toast('Set your Google Sheet link first'); return; }
+  if (!silent) toast('Loading prices from your sheet…');
+  try{
+    let r = null, note = '';
+    try{ r = await readAllTabs(); if (r) note = ` from ${r.tabs.length} of ${r.tabCount} tabs`; lastTabs = r ? r.tabs : []; }catch(e){ r = null; }
+    if (!r || !r.rows.length){
+      const text = await fetchText(url);
+      if (/^\s*<!DOCTYPE|<html/i.test(text)) throw new Error('Sheet is not shared — set it to “Anyone with the link can view”.');
+      r = parseTable(text);
+      if (r.error) throw new Error(r.error);
+      note = '';
+    }
+    const res = mergeRows(r.rows);
+    lastSync = Date.now(); ls.set('ps_lastsync', lastSync);
+    if (!silent || res.added) toast(`Sheet loaded${note}: ${res.added} new, ${res.updated} updated`);
+    return res;
+  }catch(e){ if (!silent) toast('Couldn’t load sheet: ' + (e.message||'no internet')); }
+}
+function openSheetSettings(){
+  openSheet(`<h2>Google Sheet</h2>
+    <p class="hint" style="margin-top:0">Every tab of this workbook is read each time the app opens (when online), and all product rows are combined. Barcodes you learn in the app are kept. The sheet must be shared as “Anyone with the link can view”.</p>
+    <div class="field"><p class="label">Sheet link</p><input class="input" id="sheetUrlIn" value="${esc(sheetUrl)}"></div>
+    <p class="hint">${lastSync ? 'Last loaded: ' + new Date(lastSync).toLocaleString() : 'Not loaded yet.'}${lastTabs.length ? '<br>Tabs with products: ' + esc(lastTabs.join(', ')) : ''}</p>
+    <div class="actions"><button class="btn" id="syncNow">Load prices now</button><button class="btn plain" id="sheetClose">Close</button></div>
+    <div class="actions"><button class="btn ghost" id="pasteImport">Paste rows instead</button><button class="btn ghost" id="sheetExport">Copy to spreadsheet</button></div>`);
+  $('#syncNow').addEventListener('click', async () => { sheetUrl = $('#sheetUrlIn').value.trim(); ls.set('ps_sheet', sheetUrl); closeSheet(); await syncSheet(false); });
+  $('#sheetClose').addEventListener('click', () => { sheetUrl = $('#sheetUrlIn').value.trim() || sheetUrl; ls.set('ps_sheet', sheetUrl); closeSheet(); });
+  $('#pasteImport').addEventListener('click', openImport);
+  $('#sheetExport').addEventListener('click', exportRows);
+}
+function openImport(){
+  openSheet(`<h2>Paste rows from your sheet</h2>
+    <p class="hint">Select the header row and product rows in Google Sheets, copy, and paste here.</p>
+    <textarea class="input" id="impText" placeholder="Paste rows here"></textarea>
+    <div class="hint" id="impStatus" style="margin:8px 0"></div>
+    <div class="actions"><button class="btn" id="impGo">Import</button><button class="btn plain" id="impCancel">Cancel</button></div>`);
+  $('#impCancel').addEventListener('click', closeSheet);
+  $('#impText').addEventListener('input', () => { const r = parseTable($('#impText').value); $('#impStatus').textContent = r.error || `${r.rows.length} products found`; });
+  $('#impGo').addEventListener('click', () => {
+    const r = parseTable($('#impText').value);
+    if (r.error || !r.rows.length){ $('#impStatus').textContent = r.error || 'Nothing to import.'; return; }
+    const res = mergeRows(r.rows); closeSheet(); toast(`Imported: ${res.added} new, ${res.updated} updated`);
+  });
+}
+function copyText(txt){
+  if (Native && Native.copyText){ Native.copyText(txt); return Promise.resolve(); }
+  return navigator.clipboard.writeText(txt);
+}
+function exportRows(){
+  const head = ['Category','Product','Brand','Size / Unit','Qty','Cost Price (₱)','Selling Price (₱)','Barcode'];
+  const list = sortP(products);
+  const rows = list.map(p => [p.category,p.name,p.brand,p.size,p.qty??'',p.cost??'',p.price,p.barcode ? "'" + p.barcode : ''].map(v => String(v??'').replace(/[\t\n]/g,' ')).join('\t'));
+  const noHead = rows.join('\n'), withHead = [head.join('\t'), ...rows].join('\n');
+  const linked = list.filter(p => p.barcode).length;
+  openSheet(`<h2>Copy to your spreadsheet</h2>
+    <p class="hint" style="margin-top:0">${linked} of ${list.length} products have barcodes. Columns match your sheet (A–G), with <b>Barcode</b> as column H.</p>
+    <ol class="hint" style="padding-left:18px;margin:8px 0 12px">
+      <li>Tap <b>Copy rows</b>.</li>
+      <li>In Google Sheets, type <b>Barcode</b> in cell <b>H4</b> (first time only).</li>
+      <li>Tap cell <b>A5</b> and paste — this replaces the product rows with the updated list.</li>
+    </ol>
+    <div class="actions" style="margin-top:0"><button class="btn" id="cpRows">Copy rows</button><button class="btn ghost" id="cpHead">Copy with header</button></div>
+    <button class="btn plain block" id="cpClose" style="margin-top:10px">Done</button>`);
+  const copy = (t, b) => copyText(t).then(() => { b.textContent = 'Copied ✓'; toast('Copied — now paste into Google Sheets'); }, () => toast('Copy failed'));
+  $('#cpRows').addEventListener('click', e => copy(noHead, e.currentTarget));
+  $('#cpHead').addEventListener('click', e => copy(withHead, e.currentTarget));
+  $('#cpClose').addEventListener('click', closeSheet);
+}
+
+// ---------------- Toast & nav ----------------
+let tt;
+function toast(msg, actLabel, act){
+  $('#toastMsg').textContent = msg;
+  const b = $('#toastAct'); b.textContent = actLabel||''; b.style.display = actLabel?'':'none';
+  b.onclick = () => { $('#toast').classList.remove('show'); act && act(); };
+  $('#toast').classList.add('show'); clearTimeout(tt); tt = setTimeout(() => $('#toast').classList.remove('show'), 3500);
+}
+function go(v){
+  document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id==='view-'+v));
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.view===v));
+  if (v!=='scan' && scanning) stopScan();
+  window.scrollTo(0,0); renderCart();
+}
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => { go(b.dataset.view); if (b.dataset.view==='scan') startScan(); }));
+function setMode(m){
+  scanMode = m; ls.set('ps_mode', m);
+  $('#modeCheck').classList.toggle('on', m==='check'); $('#modeCart').classList.toggle('on', m==='cart');
+  renderCart();
+}
+$('#modeCheck').addEventListener('click', () => setMode('check'));
+$('#modeCart').addEventListener('click', () => setMode('cart'));
+
+$('#startBtn').addEventListener('click', startScan);
+$('#stopBtn').addEventListener('click', () => stopScan());
+$('#sheetBtn').addEventListener('click', openSheetSettings);
+$('#manualForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const q = $('#manualInput').value.trim(); if (!q) return;
+  if (byCode(q) || /^\d{6,}$/.test(q)){ handleCode(q); $('#manualInput').value=''; $('#manualResults').innerHTML=''; return; }
+  const r = search(q); if (r.length===1){ if (scanMode==='cart') addToCart(r[0].id); showResult(r[0]); $('#manualResults').innerHTML=''; }
+});
+$('#manualInput').addEventListener('input', renderManual);
+$('#manualResults').addEventListener('click', e => { const li = e.target.closest('.item'); if (!li || !li.dataset.id) return; const p = byId(li.dataset.id); if (p){ if (scanMode==='cart') addToCart(p.id); showResult(p); } });
+const stepHandler = e => { const inc = e.target.closest('[data-inc]'), dec = e.target.closest('[data-dec]'); if (inc) addToCart(inc.dataset.inc, 1); if (dec) addToCart(dec.dataset.dec, -1); };
+$('#cartList').addEventListener('click', stepHandler);
+$('#saleOnScanList').addEventListener('click', stepHandler);
+$('#cashInput').addEventListener('input', updateChange);
+$('#cashGrid').addEventListener('click', e => {
+  const b = e.target.closest('[data-cash]'); if (!b) return;
+  const v = b.dataset.cash, inp = $('#cashInput');
+  if (v==='exact') inp.value = cartTotal().toFixed(2); else if (v==='clear') inp.value = ''; else inp.value = ((parseFloat(inp.value)||0) + Number(v)).toFixed(2);
+  updateChange();
+});
+$('#completeSale').addEventListener('click', completeSale);
+$('#posCheckout').addEventListener('click', () => go('cart'));
+$('#cartScan').addEventListener('click', () => { setMode('cart'); go('scan'); startScan(); });
+const cancelSale = () => { if (!cart.length) return; const prev = cart.slice(); cart = []; saveCart(); $('#cashInput').value=''; renderCart(); toast('Sale cancelled', 'Undo', () => { cart = prev; saveCart(); renderCart(); }); };
+$('#cartClear').addEventListener('click', cancelSale);
+$('#saleOnScanClear').addEventListener('click', cancelSale);
+$('#prodSearch').addEventListener('input', renderProducts);
+$('#prodList').addEventListener('click', e => { const li = e.target.closest('.item'); if (li && li.dataset.id){ const p = byId(li.dataset.id); p && openEdit(p); } });
+$('#addBtn').addEventListener('click', () => openEdit({id:newId(),name:'',brand:'',size:'',category:'',price:'',cost:'',qty:'',barcode:''}, true));
+$('#importBtn').addEventListener('click', openImport);
+$('#exportBtn').addEventListener('click', exportRows);
+window.__onBack = () => { if ($('#sheetBg').classList.contains('open')){ closeSheet(); return true; } if (!$('#view-scan').classList.contains('active')){ go('scan'); return true; } return false; };
+
+setMode(scanMode);
+renderAll(); renderSales();
+syncSheet(true);
+setTimeout(startScan, 300);
+})();
+</script>
+</body>
+</html>
