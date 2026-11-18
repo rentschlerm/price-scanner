@@ -27,6 +27,7 @@ jobs:
         run: |
           curl -fsSL https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js -o app/src/main/assets/zxing.min.js
           curl -fsSL https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js -o app/src/main/assets/xlsx.full.min.js
+          cp apps-script/Code.gs app/src/main/assets/Code.gs
 
       - name: Build APK
         env:

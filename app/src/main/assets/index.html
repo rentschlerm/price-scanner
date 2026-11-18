@@ -25,6 +25,7 @@ main{padding:14px 14px 170px;max-width:560px;margin:0 auto}
 .seg button{flex:1;border:0;background:transparent;padding:10px;border-radius:9px;font-weight:600;color:var(--muted)}
 .seg button.on{background:#fff;color:var(--brand);box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .cam{position:relative;border-radius:20px;overflow:hidden;background:#0b1513;aspect-ratio:4/3;margin-bottom:10px}
+.cam.native{aspect-ratio:auto;min-height:150px}
 .cam video{width:100%;height:100%;object-fit:cover;display:block}
 .cam .aim{position:absolute;left:10%;right:10%;top:30%;bottom:30%;border:3px solid rgba(255,255,255,.9);border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.35);transition:border-color .15s}
 .cam .aim.hit{border-color:#4ade80}
@@ -209,15 +210,60 @@ let scanMode = ls.get('ps_mode','cart');
 let sheetUrl = ls.get('ps_sheet', DEFAULT_SHEET);
 let lastSync = ls.get('ps_lastsync', 0);
 let lastTabs = [];
+let sheetTabs = ls.get('ps_tabs', []);
+let writeUrl = ls.get('ps_writeurl', '');
+let queue = ls.get('ps_queue', []);
 let editTarget = null; // input element that receives the next scanned code (edit form)
 
 function persist(){ ls.set('ps_products', products); }
 function saveProduct(p){
-  const rec = {id:p.id, name:p.name||'', brand:p.brand||'', size:p.size||'', category:p.category||'', qty:p.qty===''||p.qty==null?null:Number(p.qty), price:Number(p.price)||0, cost:p.cost===''||p.cost==null?null:Number(p.cost), barcode:String(p.barcode||'').trim()};
   const i = products.findIndex(x => x.id===p.id);
+  const old = i>=0 ? products[i] : null;
+  const rec = {id:p.id, name:p.name||'', brand:p.brand||'', size:p.size||'', category:p.category||'', qty:p.qty===''||p.qty==null?null:Number(p.qty), price:Number(p.price)||0, cost:p.cost===''||p.cost==null?null:Number(p.cost), barcode:String(p.barcode||'').trim(), tab: p.tab || (old && old.tab) || ''};
   if (i>=0) products[i] = rec; else products.push(rec);
-  persist(); renderAll(); return rec;
+  persist(); renderAll();
+  queueWrite(rec, old);
+  return rec;
 }
+
+// ---------------- Write back to the Google Sheet ----------------
+function queueWrite(rec, old){
+  if (!writeUrl) return;
+  const match = old ? {name:old.name, brand:old.brand, size:old.size} : {name:rec.name, brand:rec.brand, size:rec.size};
+  const {id, tab, ...product} = rec;
+  // Replace any waiting write for the same product with the newest version.
+  queue = queue.filter(q => q.id !== id);
+  queue.push({id, action:'save', tab: rec.tab || '', match, product});
+  ls.set('ps_queue', queue);
+  flushQueue();
+}
+function postJson(url, obj){
+  const body = JSON.stringify(obj);
+  return new Promise((res, rej) => {
+    const done = t => { try{ res(JSON.parse(t)); }catch(e){ rej(new Error('The sheet link did not answer correctly — check the deployment is set to “Anyone”.')); } };
+    if (Native && Native.postJson){ const cid = 'c' + (++cbN); cbs[cid] = (ok, t) => ok ? done(t) : rej(new Error(t)); Native.postJson(url, body, cid); }
+    else fetch(url, {method:'POST', body, headers:{'Content-Type':'text/plain;charset=utf-8'}}).then(r => r.text()).then(done, rej);
+  });
+}
+let flushing = false;
+async function flushQueue(){
+  if (flushing || !writeUrl || !queue.length) { renderQueue(); return; }
+  flushing = true;
+  try{
+    while (queue.length){
+      const q = queue[0];
+      let res;
+      try{ res = await postJson(writeUrl, q); }
+      catch(e){ toast('Sheet not updated yet (' + (e.message||'offline') + '). Will retry.'); break; }
+      if (!res.ok){ toast('Sheet error: ' + (res.error||'unknown')); queue.shift(); ls.set('ps_queue', queue); continue; }
+      queue.shift(); ls.set('ps_queue', queue);
+      const p = byId(q.id);
+      if (p && res.tab && p.tab !== res.tab){ p.tab = res.tab; persist(); }
+      toast(`${res.added ? 'Added to' : 'Updated in'} sheet ✓ · ${res.tab} row ${res.row}`);
+    }
+  } finally { flushing = false; renderQueue(); }
+}
+function renderQueue(){ const el = document.getElementById('queueInfo'); if (el) el.textContent = queue.length ? `${queue.length} change${queue.length===1?'':'s'} waiting to be written to the sheet.` : (writeUrl ? 'All changes are in the sheet.' : ''); }
 function deleteProduct(id){ products = products.filter(p => p.id!==id); persist(); renderAll(); }
 
 const byId = id => products.find(p => p.id===id);
@@ -268,7 +314,23 @@ async function setupDecoders(){
   }
 }
 
+const NATIVE_CAM = !!(Native && Native.hasNativeScanner);
+window.__onNativeScan = code => onDecoded(code);
+window.__onCameraState = (on, err) => {
+  scanning = !!on;
+  $('#cam').style.display = on ? 'none' : '';
+  if (!on) $('#camSub').textContent = err === 'denied'
+    ? 'Camera blocked. Allow camera for Price Scanner in Settings → Apps → Price Scanner → Permissions.'
+    : (err ? 'Camera error: ' + err : 'Scanner paused — tap Start to scan');
+};
+function onDecoded(code){
+  const now = Date.now();
+  if (code === lastCode && now - lastAt < 1800){ lastAt = now; return; }
+  lastCode = code; lastAt = now;
+  handleCode(code);
+}
 async function startScan(){
+  if (NATIVE_CAM){ $('#camSub').textContent = 'Starting camera…'; Native.startCamera(); return; }
   if (scanning) return;
   $('#camSub').textContent = 'Starting camera…';
   try{
@@ -291,6 +353,7 @@ async function startScan(){
   loop();
 }
 function stopScan(msg){
+  if (NATIVE_CAM){ Native.stopCamera(); window.__onCameraState(false); return; }
   scanning = false; clearTimeout(loopTimer);
   if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
   torchOn = false; $('#torchBtn').textContent = '🔦 Light';
@@ -327,14 +390,7 @@ async function loop(){
   if (!scanning) return;
   let code = null;
   try{ code = await decodeFrame(); }catch(e){}
-  if (code){
-    const now = Date.now();
-    if (!(code === lastCode && now - lastAt < 2500)){
-      lastCode = code; lastAt = now;
-      $('#aim').classList.add('hit'); setTimeout(() => $('#aim').classList.remove('hit'), 300);
-      handleCode(code);
-    } else lastAt = now;
-  }
+  if (code){ $('#aim').classList.add('hit'); setTimeout(() => $('#aim').classList.remove('hit'), 300); onDecoded(code); }
   loopTimer = setTimeout(loop, detector ? 120 : 60);
 }
 
@@ -350,7 +406,7 @@ function handleCode(code){
   showResult(p, code);
 }
 
-document.addEventListener('visibilitychange', () => { if (document.hidden && scanning) stopScan(); });
+document.addEventListener('visibilitychange', () => { if (!NATIVE_CAM && document.hidden && scanning) stopScan(); });
 
 // ---------------- Result card ----------------
 function showResult(p, code){
@@ -484,6 +540,7 @@ function openLink(code){
 function openEdit(p, isNew){
   isNew = isNew || !byId(p.id);
   const draft = {...p};
+  if (isNew && !draft.tab && draft.category){ const same = products.find(x => x.tab && (x.category||'').toLowerCase()===draft.category.toLowerCase()); if (same) draft.tab = same.tab; }
   const render = () => {
     openSheet(`<h2>${isNew?'New product':'Edit product'}</h2>
     <form id="editForm">
@@ -500,6 +557,7 @@ function openEdit(p, isNew){
         <div class="field"><p class="label">Category</p><input class="input" name="category" value="${esc(draft.category)}"></div>
         <div class="field"><p class="label">Qty</p><input class="input" name="qty" inputmode="numeric" value="${esc(draft.qty ?? '')}"></div>
       </div>
+      ${sheetTabs.length ? `<div class="field"><p class="label">Sheet tab</p><select class="input" name="tab">${['', ...sheetTabs].map(t => `<option value="${esc(t)}" ${t===(draft.tab||'')?'selected':''}>${t ? esc(t) : 'Automatic (by category)'}</option>`).join('')}</select></div>` : '<input type="hidden" name="tab" value="">'}
       <div class="field"><p class="label">Barcode(s)</p>
         <div class="row"><input class="input" name="barcode" inputmode="numeric" value="${esc(draft.barcode)}" placeholder="Scan or type"><button type="button" class="btn ghost" id="scanCodeBtn">Scan</button></div>
         <p class="hint" style="margin:6px 0 0">Separate several barcodes with commas (e.g. single pack and box).</p></div>
@@ -510,7 +568,7 @@ function openEdit(p, isNew){
       </div>
     </form>`);
     const f = $('#editForm');
-    const grab = () => { ['name','brand','size','price','cost','category','qty','barcode'].forEach(k => draft[k] = f[k].value); };
+    const grab = () => { ['name','brand','size','price','cost','category','qty','barcode','tab'].forEach(k => draft[k] = f[k].value); };
     $('#cancelBtn').addEventListener('click', closeSheet);
     $('#scanCodeBtn').addEventListener('click', () => {
       grab(); closeSheet(); go('scan');
@@ -530,7 +588,7 @@ function openEdit(p, isNew){
       const clash = String(draft.barcode).split(/[,;\s]+/).filter(Boolean).map(byCode).find(x => x && x.id!==p.id);
       if (clash && !f.dataset.ok){ f.dataset.ok = 1; toast(`That barcode is already on “${clash.name}”. Tap Save again to use it anyway.`); return; }
       const num = v => { v = String(v??'').replace(/[^\d.]/g,''); return v==='' ? null : parseFloat(v); };
-      const upd = saveProduct({id:p.id, name:draft.name.trim(), brand:draft.brand.trim(), size:draft.size.trim(), category:draft.category.trim(), price, cost:num(draft.cost), qty:num(draft.qty), barcode:String(draft.barcode).trim()});
+      const upd = saveProduct({id:p.id, tab:draft.tab||'', name:draft.name.trim(), brand:draft.brand.trim(), size:draft.size.trim(), category:draft.category.trim(), price, cost:num(draft.cost), qty:num(draft.qty), barcode:String(draft.barcode).trim()});
       closeSheet(); toast(isNew ? 'Product added' : 'Saved', upd.barcode ? 'Copy to sheet' : '', upd.barcode ? exportRows : null);
       if (isNew && scanMode==='cart' && $('#view-scan').classList.contains('active')) addToCart(upd.id);
       if ($('#view-scan').classList.contains('active')) showResult(upd);
@@ -556,13 +614,18 @@ async function readAllTabs(){
   if (!url || !window.XLSX) return null;
   const b64 = await fetchBase64(url);
   const wb = XLSX.read(b64, {type:'base64'});
-  const rows = [], tabs = [];
+  const found = [];
   for (const name of wb.SheetNames){
     const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], {blankrows:false});
     const r = parseTable(csv);
-    if (r.rows.length){ tabs.push(`${name} (${r.rows.length})`); rows.push(...r.rows); }
+    if (r.rows.length){ r.rows.forEach(x => x.tab = name); found.push({name, rows:r.rows}); }
   }
-  return {rows, tabs, tabCount: wb.SheetNames.length};
+  // A search/lookup tab only repeats rows from the real tabs — skip it when other tabs have products.
+  const isSearch = n => /search|lookup|dashboard/i.test(n);
+  const use = found.some(f => !isSearch(f.name)) ? found.filter(f => !isSearch(f.name)) : found;
+  sheetTabs = use.map(f => f.name); ls.set('ps_tabs', sheetTabs);
+  const rows = [].concat(...use.map(f => f.rows));
+  return {rows, tabs: use.map(f => `${f.name} (${f.rows.length})`), tabCount: wb.SheetNames.length};
 }
 function sheetCsvUrl(u){
   const m = String(u).match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/); if (!m) return null;
@@ -646,11 +709,51 @@ function openSheetSettings(){
     <div class="field"><p class="label">Sheet link</p><input class="input" id="sheetUrlIn" value="${esc(sheetUrl)}"></div>
     <p class="hint">${lastSync ? 'Last loaded: ' + new Date(lastSync).toLocaleString() : 'Not loaded yet.'}${lastTabs.length ? '<br>Tabs with products: ' + esc(lastTabs.join(', ')) : ''}</p>
     <div class="actions"><button class="btn" id="syncNow">Load prices now</button><button class="btn plain" id="sheetClose">Close</button></div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <h2 style="font-size:16px">Write to the sheet</h2>
+    <p class="hint" style="margin-top:0">With this set, learned barcodes and new or edited products are written straight into the right tab of your sheet. ${writeUrl ? '' : '<b>One-time setup needed.</b>'}</p>
+    <div class="field"><p class="label">Sheet write link</p><input class="input" id="writeUrlIn" value="${esc(writeUrl)}" placeholder="https://script.google.com/macros/s/…/exec"></div>
+    <p class="hint" id="queueInfo"></p>
+    <div class="actions"><button class="btn" id="writeSave">Save &amp; test link</button><button class="btn ghost" id="setupHelp">Setup steps</button></div>
+    <div class="actions"><button class="btn plain" id="pushAll">Write all barcodes to sheet</button></div>
     <div class="actions"><button class="btn ghost" id="pasteImport">Paste rows instead</button><button class="btn ghost" id="sheetExport">Copy to spreadsheet</button></div>`);
+  renderQueue();
+  $('#writeSave').addEventListener('click', async () => {
+    writeUrl = $('#writeUrlIn').value.trim(); ls.set('ps_writeurl', writeUrl);
+    if (!writeUrl){ toast('Write link removed'); renderQueue(); return; }
+    if (!/^https:\/\/script\.google\.com\/.*\/exec/.test(writeUrl)){ toast('That doesn’t look like a web app link (it should end with /exec)'); return; }
+    toast('Testing link…');
+    try{ const r = await postJson(writeUrl, {action:'ping'}); if (r.ok){ if (r.tabs) { sheetTabs = r.tabs; ls.set('ps_tabs', sheetTabs); } toast('Connected ✓ — tabs: ' + (r.tabs||[]).join(', ')); flushQueue(); } else toast('Link answered with an error: ' + r.error); }
+    catch(e){ toast('Couldn’t reach the link: ' + e.message); }
+  });
+  $('#setupHelp').addEventListener('click', openSetupHelp);
+  $('#pushAll').addEventListener('click', () => {
+    if (!writeUrl){ toast('Set the sheet write link first'); return; }
+    const withCodes = products.filter(p => p.barcode);
+    withCodes.forEach(p => { const {id, tab, ...product} = p; queue = queue.filter(q => q.id !== id); queue.push({id, action:'save', tab: tab||'', match:{name:p.name, brand:p.brand, size:p.size}, product}); });
+    ls.set('ps_queue', queue); toast(`Writing ${withCodes.length} products…`); flushQueue();
+  });
   $('#syncNow').addEventListener('click', async () => { sheetUrl = $('#sheetUrlIn').value.trim(); ls.set('ps_sheet', sheetUrl); closeSheet(); await syncSheet(false); });
   $('#sheetClose').addEventListener('click', () => { sheetUrl = $('#sheetUrlIn').value.trim() || sheetUrl; ls.set('ps_sheet', sheetUrl); closeSheet(); });
   $('#pasteImport').addEventListener('click', openImport);
   $('#sheetExport').addEventListener('click', exportRows);
+}
+async function openSetupHelp(){
+  let code = '';
+  try{ code = await fetch('Code.gs').then(r => r.text()); }catch(e){}
+  openSheet(`<h2>Connect the app to your sheet (once)</h2>
+    <p class="hint" style="margin-top:0">Easiest on a computer. Takes about 3 minutes.</p>
+    <ol class="hint" style="padding-left:18px">
+      <li>Tap <b>Copy script</b> below (or open github.com/rentschlerm/price-scanner → apps-script/Code.gs).</li>
+      <li>Open your Google Sheet → <b>Extensions → Apps Script</b>. Delete what’s there, paste, and press <b>Save</b>.</li>
+      <li>Click <b>Deploy → New deployment</b>. Click the gear ⚙ → <b>Web app</b>.</li>
+      <li>Set <b>Execute as: Me</b> and <b>Who has access: Anyone</b>. Click <b>Deploy</b>, then <b>Authorize access</b> and allow it (choose your account → Advanced → Go to project).</li>
+      <li>Copy the <b>Web app URL</b> (ends with <b>/exec</b>), paste it into <b>Sheet write link</b> here, and tap <b>Save &amp; test link</b>.</li>
+    </ol>
+    <p class="hint">The script only adds or updates product rows (and adds a “Barcode” column where a tab has none). It never touches formulas or a tab with “search” in its name.</p>
+    <div class="actions"><button class="btn" id="copyScript" ${code?'':'disabled'}>Copy script</button><button class="btn plain" id="helpClose">Back</button></div>`);
+  $('#copyScript').addEventListener('click', e => copyText(code).then(() => { e.currentTarget.textContent = 'Copied ✓'; }, () => toast('Copy failed')));
+  $('#helpClose').addEventListener('click', openSheetSettings);
 }
 function openImport(){
   openSheet(`<h2>Paste rows from your sheet</h2>
@@ -748,9 +851,10 @@ $('#importBtn').addEventListener('click', openImport);
 $('#exportBtn').addEventListener('click', exportRows);
 window.__onBack = () => { if ($('#sheetBg').classList.contains('open')){ closeSheet(); return true; } if (!$('#view-scan').classList.contains('active')){ go('scan'); return true; } return false; };
 
+if (NATIVE_CAM){ $('#cam').classList.add('native'); $('#camSub').textContent = 'Point the camera at a barcode — it scans automatically. Tap the picture to focus.'; }
 setMode(scanMode);
 renderAll(); renderSales();
-syncSheet(true);
+syncSheet(true).then(() => flushQueue());
 setTimeout(startScan, 300);
 })();
 </script>
