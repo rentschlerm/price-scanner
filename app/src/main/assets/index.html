@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Price Scanner</title>
-<meta name="min-native" content="5">
+<meta name="min-native" content="6">
 <script src="zxing.min.js"></script>
 <script src="xlsx.full.min.js"></script>
 <style>
@@ -101,20 +101,49 @@ textarea.input{min-height:120px;font-family:monospace;font-size:13px}
 .sectionhead{display:flex;justify-content:space-between;align-items:center;margin:4px 2px 10px}
 .sectionhead h2{font-size:17px;margin:0}
 .salebox .line{display:flex;justify-content:space-between;padding:4px 0;font-size:14px}
+
+.stat{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.stat div{background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 12px;cursor:pointer}
+.stat div.on{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand-soft)}
+.stat b{display:block;font-size:22px}
+.stat span{font-size:12px;color:var(--muted);font-weight:600}
+.badge.out{background:var(--danger-soft);color:var(--danger)}
+.badge.low{background:var(--warn-soft);color:var(--warn)}
+.badge.none{background:#eef1f0;color:var(--muted)}
+.stock{font-size:13px;margin-top:6px;font-weight:600}
+.headbtns{display:flex;gap:6px}
+.switch{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.switch input{width:22px;height:22px}
+.seg3 button{font-size:14px;padding:10px 4px}
+/* ---------- Tablet / wide screen: sale panel always visible on the right ---------- */
+@media (min-width: 1000px){
+  main{max-width:1500px;display:grid;grid-template-columns:minmax(0,1.45fr) minmax(380px,1fr);gap:18px;align-items:start;padding-bottom:110px}
+  .view{grid-column:1}
+  #view-cart{display:block !important;grid-column:2;grid-row:1;position:sticky;top:64px;max-height:calc(100vh - 150px);overflow:auto;padding-right:2px}
+  nav button[data-view="cart"], .posbar, #saleOnScan, #cartScan{display:none !important}
+  .result .price{font-size:52px}
+  .total .big{font-size:48px}
+  .cashgrid button{padding:16px 0;font-size:17px}
+  #completeSale{padding:20px !important;font-size:20px !important}
+  nav{justify-content:center}
+  nav button{max-width:200px}
+  .cam.native{min-height:110px}
+}
 </style>
 </head>
 <body>
 <header>
   <h1>Price Scanner</h1>
-  <button id="sheetBtn">⟳ Sheet</button>
+  <div class="headbtns"><button id="sheetBtn">⟳ Sheet</button><button id="setBtn">⚙ Settings</button></div>
 </header>
 
 <div id="updBar" style="display:none;background:#fef3c7;color:#78350f;padding:10px 16px;font-size:14px;align-items:center;gap:10px"><span id="updMsg" style="flex:1">A new version of the app is ready.</span><button class="btn" id="updBtn" style="padding:8px 14px">Update</button></div>
 <main>
   <section class="view active" id="view-scan">
-    <div class="seg">
+    <div class="seg seg3">
       <button id="modeCart" class="on">Sell (POS)</button>
       <button id="modeCheck">Price check</button>
+      <button id="modeRecv">Receive stock</button>
     </div>
     <div class="cam" id="cam">
       <video id="video" playsinline muted></video>
@@ -165,6 +194,15 @@ textarea.input{min-height:120px;font-family:monospace;font-size:13px}
     </div>
   </section>
 
+  <section class="view" id="view-stock">
+    <div class="sectionhead"><h2>Inventory</h2><button class="btn ghost" id="stockRecvBtn">Receive by scanning</button></div>
+    <div class="stat" id="stockStats"></div>
+    <input class="input" id="stockSearch" placeholder="Search products" style="margin-bottom:12px">
+    <div class="card" style="padding:6px 14px"><ul class="list" id="stockList"></ul></div>
+    <p class="hint" id="stockValue"></p>
+    <p class="hint">Stock is counted in pieces. Sales subtract automatically; use <b>Receive</b> when deliveries arrive and <b>Count</b> after a shelf count. Every change is recorded in the sheet’s <b>Stock Log</b> tab.</p>
+  </section>
+
   <section class="view" id="view-products">
     <div class="sectionhead"><h2 id="prodHead">Products</h2>
       <div class="row"><button class="btn plain" id="importBtn">Paste</button><button class="btn" id="addBtn">+ Add</button></div>
@@ -179,6 +217,7 @@ textarea.input{min-height:120px;font-family:monospace;font-size:13px}
 <nav>
   <button data-view="scan" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M15 8v8"/></svg>Scan</button>
   <button data-view="cart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.6 12.2a2 2 0 0 0 2 1.6h8.2a2 2 0 0 0 2-1.5L22 7H6"/></svg>Sale<span class="count" id="navCount" style="display:none">0</span></button>
+  <button data-view="stock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>Stock<span class="count" id="lowCount" style="display:none;background:var(--warn)">0</span></button>
   <button data-view="products"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>Products</button>
 </nav>
 <div class="posbar" id="posbar"><div class="in"><div><div class="amt" id="posAmt">₱0.00</div><div class="n" id="posN">0 items</div></div><button class="btn" id="posCheckout">Checkout</button></div></div>
@@ -214,6 +253,10 @@ let lastSync = ls.get('ps_lastsync', 0);
 let lastTabs = [];
 let sheetTabs = ls.get('ps_tabs', []);
 let writeUrl = ls.get('ps_writeurl', '');
+let settings = Object.assign({device: (Math.min(screen.width, screen.height) >= 600 ? 'Tablet' : 'Phone'), autoCam: true, reorderDefault: 10,
+  storeName: '', storeLine: '', footer: 'Thank you! Come again.', paper: 58, printer: '', printerName: '', autoPrint: false}, ls.get('ps_settings', {}));
+const saveSettings = () => ls.set('ps_settings', settings);
+let stockFilter = 'all';
 let queue = ls.get('ps_queue', []);
 let editTarget = null; // input element that receives the next scanned code (edit form)
 
@@ -221,7 +264,8 @@ function persist(){ ls.set('ps_products', products); }
 function saveProduct(p){
   const i = products.findIndex(x => x.id===p.id);
   const old = i>=0 ? products[i] : null;
-  const rec = {id:p.id, name:p.name||'', brand:p.brand||'', size:p.size||'', category:p.category||'', qty:p.qty===''||p.qty==null?null:Number(p.qty), price:Number(p.price)||0, cost:p.cost===''||p.cost==null?null:Number(p.cost), barcode:String(p.barcode||'').trim(), tab: p.tab || (old && old.tab) || ''};
+  const rec = {id:p.id, name:p.name||'', brand:p.brand||'', size:p.size||'', category:p.category||'', qty:p.qty===''||p.qty==null?null:Number(p.qty), price:Number(p.price)||0, cost:p.cost===''||p.cost==null?null:Number(p.cost), barcode:String(p.barcode||'').trim(), tab: p.tab || (old && old.tab) || '',
+    stock: p.stock !== undefined ? p.stock : (old ? old.stock : null), reorder: p.reorder === '' || p.reorder == null ? (old && p.reorder === undefined ? old.reorder : null) : Number(p.reorder)};
   if (i>=0) products[i] = rec; else products.push(rec);
   persist(); renderAll();
   queueWrite(rec, old);
@@ -232,7 +276,7 @@ function saveProduct(p){
 function queueWrite(rec, old){
   if (!writeUrl) return;
   const match = old ? {name:old.name, brand:old.brand, size:old.size} : {name:rec.name, brand:rec.brand, size:rec.size};
-  const {id, tab, ...product} = rec;
+  const {id, tab, stock, ...product} = rec;
   // Replace any waiting write for the same product with the newest version.
   queue = queue.filter(q => q.id !== id);
   queue.push({id, action:'save', tab: rec.tab || '', match, product});
@@ -257,13 +301,89 @@ async function flushQueue(){
       let res;
       try{ res = await postJson(writeUrl, q); }
       catch(e){ toast('Sheet not updated yet (' + (e.message||'offline') + '). Will retry.'); break; }
-      if (!res.ok){ toast('Sheet error: ' + (res.error||'unknown')); queue.shift(); ls.set('ps_queue', queue); continue; }
+      if (!res.ok){
+        if (/unknown action/i.test(res.error||'')){ toast('Update the script in your sheet to use stock & sales (⟳ Sheet → Setup steps).'); break; }
+        toast('Sheet error: ' + (res.error||'unknown')); queue.shift(); ls.set('ps_queue', queue); continue;
+      }
       queue.shift(); ls.set('ps_queue', queue);
-      const p = byId(q.id);
-      if (p && res.tab && p.tab !== res.tab){ p.tab = res.tab; persist(); }
-      toast(`${res.added ? 'Added to' : 'Updated in'} sheet ✓ · ${res.tab} row ${res.row}`);
+      if (q.action === 'save'){
+        const p = byId(q.id);
+        if (p && res.tab && p.tab !== res.tab){ p.tab = res.tab; persist(); }
+        toast(`${res.added ? 'Added to' : 'Updated in'} sheet ✓ · ${res.tab} row ${res.row}`);
+      } else if (q.action === 'stock'){
+        const p = byId(q.pid);
+        if (p && typeof res.stock === 'number'){ p.stock = res.stock; persist(); renderStock(); }
+      }
     }
   } finally { flushing = false; renderQueue(); }
+}
+// ---------------- Inventory ----------------
+const hasStock = p => p.stock !== null && p.stock !== undefined && p.stock !== '';
+const reorderOf = p => (p.reorder != null && p.reorder !== '') ? Number(p.reorder) : Number(settings.reorderDefault)||0;
+const stockState = p => !hasStock(p) ? 'none' : (p.stock <= 0 ? 'out' : (p.stock <= reorderOf(p) ? 'low' : 'ok'));
+function stockText(p){
+  if (!hasStock(p)) return 'Not counted yet';
+  const pack = Number(p.qty)||0;
+  let t = `${p.stock} pcs`;
+  if (pack > 1 && p.stock >= pack) t += ` (${Math.floor(p.stock/pack)} box${Math.floor(p.stock/pack)===1?'':'es'}${p.stock%pack ? ' + ' + (p.stock%pack) : ''})`;
+  return t;
+}
+function stockBadge(p){
+  const st = stockState(p);
+  return st==='out' ? '<span class="badge out">out</span>' : st==='low' ? '<span class="badge low">low</span>' : st==='none' ? '<span class="badge none">not counted</span>' : '';
+}
+function changeStock(p, {delta, set, reason}){
+  const before = hasStock(p) ? Number(p.stock) : 0;
+  p.stock = set != null ? Number(set) : before + Number(delta||0);
+  persist(); renderAll();
+  if (!writeUrl) return;
+  queue.push({id: 'stk-' + newId(), pid: p.id, action:'stock', tab: p.tab||'', match:{name:p.name, brand:p.brand, size:p.size},
+    product:{name:p.name, brand:p.brand, size:p.size}, delta: set != null ? null : Number(delta||0), set: set != null ? Number(set) : null,
+    reason, at: Date.now(), device: settings.device});
+  ls.set('ps_queue', queue); flushQueue();
+}
+function renderStock(){
+  const all = products;
+  const n = st => all.filter(p => stockState(p)===st).length;
+  const low = n('low'), out = n('out'), none = n('none');
+  $('#stockStats').innerHTML = [['all','All',all.length],['low','Low',low],['out','Out',out]].map(([k,l,v]) => `<div data-f="${k}" class="${stockFilter===k?'on':''}"><b>${v}</b><span>${l}</span></div>`).join('');
+  const lc = $('#lowCount'); lc.style.display = (low+out) ? '' : 'none'; lc.textContent = low+out;
+  let list = search($('#stockSearch').value);
+  if (stockFilter !== 'all') list = list.filter(p => stockState(p)===stockFilter);
+  const rank = {out:0, low:1, none:2, ok:3};
+  list.sort((a,b) => rank[stockState(a)] - rank[stockState(b)] || (a.name||'').localeCompare(b.name||''));
+  $('#stockList').innerHTML = list.map(p => `<li class="item" data-id="${esc(p.id)}"><div class="grow"><div class="t">${esc(p.name)}${stockBadge(p)}</div><div class="s">${esc([p.brand,p.size].filter(Boolean).join(' · '))}</div></div><div class="p" style="text-align:right">${hasStock(p) ? p.stock : '—'}<div class="s" style="font-weight:500">pcs</div></div></li>`).join('') || '<li class="empty">No products here.</li>';
+  const value = all.filter(hasStock).reduce((s,p) => s + Math.max(0,p.stock) * (Number(p.cost)||0), 0);
+  $('#stockValue').textContent = `Stock value at cost: ${peso(value)}${none ? ` · ${none} product${none===1?'':'s'} not counted yet` : ''}`;
+}
+function openStock(p){
+  const pack = Number(p.qty)||0;
+  openSheet(`<h2>${esc(p.name)}</h2>
+    <div class="hint" style="margin-top:-6px">${esc([p.brand,p.size].filter(Boolean).join(' · '))}${p.tab ? ' · tab: ' + esc(p.tab) : ''}</div>
+    <div class="card" style="margin:12px 0"><div class="total"><span class="label" style="margin:0">On hand</span><span class="big" style="font-size:30px">${hasStock(p) ? p.stock : '—'}</span></div><div class="hint">${esc(stockText(p))} · reorder at ${reorderOf(p)} pcs</div></div>
+    <p class="label">Receive delivery</p>
+    <div class="grid2">
+      <div class="field"><p class="hint" style="margin:0 0 4px">Boxes${pack>1 ? ` (${pack} pcs each)` : ''}</p><input class="input" id="rcBoxes" inputmode="numeric" value="${pack>1?1:''}" ${pack>1?'':'disabled placeholder="Set pack size in Edit"'}></div>
+      <div class="field"><p class="hint" style="margin:0 0 4px">Extra pieces</p><input class="input" id="rcPcs" inputmode="numeric" value="${pack>1?'':1}"></div>
+    </div>
+    <button class="btn block" id="rcGo">Add to stock</button>
+    <p class="label" style="margin-top:18px">Shelf count</p>
+    <div class="row"><input class="input" id="cntIn" inputmode="numeric" placeholder="Counted pieces"><button class="btn ghost" id="cntGo">Set</button></div>
+    <p class="label" style="margin-top:18px">Reorder when at or below</p>
+    <div class="row"><input class="input" id="roIn" inputmode="numeric" value="${p.reorder ?? ''}" placeholder="${settings.reorderDefault} (default)"><button class="btn plain" id="roGo">Save</button></div>
+    <button class="btn plain block" id="stClose" style="margin-top:16px">Close</button>`);
+  const int = v => { v = String(v||'').replace(/[^\d-]/g,''); return v==='' ? 0 : parseInt(v,10); };
+  $('#rcGo').addEventListener('click', () => {
+    const add = int($('#rcBoxes').value) * (pack>1?pack:0) + int($('#rcPcs').value);
+    if (!add){ toast('Enter how many you received'); return; }
+    changeStock(p, {delta:add, reason:'Received'}); closeSheet(); toast(`+${add} pcs · ${p.name} now ${p.stock}`); beep(true);
+  });
+  $('#cntGo').addEventListener('click', () => {
+    const v = $('#cntIn').value.trim(); if (v===''){ $('#cntIn').focus(); return; }
+    changeStock(p, {set:int(v), reason:'Count'}); closeSheet(); toast(`${p.name} set to ${p.stock} pcs`);
+  });
+  $('#roGo').addEventListener('click', () => { const v = $('#roIn').value.trim(); saveProduct({...p, reorder: v===''?null:int(v)}); closeSheet(); toast('Reorder level saved'); });
+  $('#stClose').addEventListener('click', closeSheet);
 }
 function renderQueue(){ const el = document.getElementById('queueInfo'); if (el) el.textContent = queue.length ? `${queue.length} change${queue.length===1?'':'s'} waiting to be written to the sheet.` : (writeUrl ? 'All changes are in the sheet.' : ''); }
 function deleteProduct(id){ products = products.filter(p => p.id!==id); persist(); renderAll(); }
@@ -404,6 +524,7 @@ function handleCode(code){
   }
   const p = byCode(code);
   beep(!!p);
+  if (p && scanMode==='recv'){ showResult(p, code); openStock(p); return; }
   if (p && scanMode==='cart') addToCart(p.id);
   showResult(p, code);
 }
@@ -415,14 +536,17 @@ function showResult(p, code){
   const box = $('#resultBox');
   if (p){
     box.innerHTML = `<div class="card result">
-      <p class="label">${scanMode==='cart' ? '✓ Added to sale' : 'Price'}</p>
+      <p class="label">${scanMode==='cart' ? '✓ Added to sale' : scanMode==='recv' ? 'Receive stock' : 'Price'}</p>
       <p class="name">${esc(p.name)}</p>
       <div class="meta">${esc([p.brand,p.size].filter(Boolean).join(' · '))}</div>
       <div class="price">${peso(p.price)}</div>
+      <div class="stock" style="color:${{out:'var(--danger)',low:'var(--warn)'}[stockState(p)]||'var(--muted)'}">Stock: ${esc(stockText(p))}</div>
       <div class="actions">
         ${scanMode==='cart' ? `<button class="btn" data-act="checkout">Checkout · ${peso(cartTotal())}</button>` : `<button class="btn" data-act="add">Add to sale</button>`}
+        <button class="btn plain" data-act="stock">Stock</button>
         <button class="btn plain" data-act="edit">Edit</button>
       </div></div>`;
+    box.querySelector('[data-act="stock"]').addEventListener('click', () => openStock(p));
     box.querySelector('[data-act="add"]')?.addEventListener('click', () => { addToCart(p.id); toast(`Added ${p.name}`); });
     box.querySelector('[data-act="checkout"]')?.addEventListener('click', () => go('cart'));
     box.querySelector('[data-act="edit"]').addEventListener('click', () => openEdit(p));
@@ -455,7 +579,7 @@ function renderCart(){
   $('#cartTotal').textContent = peso(cartTotal());
   $('#cartCount').textContent = count + (count===1?' item':' items');
   const nc = $('#navCount'); nc.style.display = count ? '' : 'none'; nc.textContent = count;
-  const lineHtml = l => { const p = byId(l.id); return `<li class="item"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s">${l.qty} × ${peso(p.price)}</div></div><div class="stepper"><button data-dec="${esc(l.id)}">−</button><span>${l.qty}</span><button data-inc="${esc(l.id)}">+</button></div><div class="p" style="min-width:72px;text-align:right">${peso(p.price*l.qty)}</div></li>`; };
+  const lineHtml = l => { const p = byId(l.id); return `<li class="item"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s">${l.qty} × ${peso(p.price)}${hasStock(p) && p.stock < l.qty ? ' · <span style="color:var(--danger)">only ' + p.stock + ' in stock</span>' : ''}</div></div><div class="stepper"><button data-dec="${esc(l.id)}">−</button><span>${l.qty}</span><button data-inc="${esc(l.id)}">+</button></div><div class="p" style="min-width:72px;text-align:right">${peso(p.price*l.qty)}</div></li>`; };
   $('#cartList').innerHTML = lines.length ? lines.map(lineHtml).join('') : `<li class="empty">No items yet. Go to <b>Scan</b> and scan products.</li>`;
   $('#saleOnScan').style.display = scanMode==='cart' && lines.length ? '' : 'none';
   $('#saleOnScanList').innerHTML = lines.slice().reverse().map(lineHtml).join('');
@@ -485,15 +609,23 @@ function completeSale(){
   const total = cartTotal();
   const cash = parseFloat(($('#cashInput').value||'').replace(/[^\d.]/g,''));
   if (cash && cash < total){ toast('Cash is less than the total'); return; }
-  const sale = { at: Date.now(), total: Math.round(total*100)/100, count: lines.reduce((s,l)=>s+l.qty,0), cash: cash||null, change: cash ? Math.round((cash-total)*100)/100 : null,
-    items: lines.map(l => { const p = byId(l.id); return {name:p.name, price:Number(p.price)||0, qty:l.qty}; }) };
+  const sale = { id: 'S' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2,5).toUpperCase(), at: Date.now(), device: settings.device,
+    total: Math.round(total*100)/100, count: lines.reduce((s,l)=>s+l.qty,0), cash: cash||null, change: cash ? Math.round((cash-total)*100)/100 : null,
+    items: lines.map(l => { const p = byId(l.id); return {name:p.name, brand:p.brand||'', size:p.size||'', tab:p.tab||'', price:Number(p.price)||0, qty:l.qty}; }) };
+  // Stock goes down right away on this device; the sheet is updated in the background.
+  lines.forEach(l => { const p = byId(l.id); if (p && hasStock(p)) p.stock = Number(p.stock) - l.qty; });
+  persist();
+  if (writeUrl){ queue.push({id:'sale-' + sale.id, action:'sale', sale}); ls.set('ps_queue', queue); flushQueue(); }
   sales.push(sale); sales = sales.filter(x => x.at > Date.now() - 60*86400000); ls.set('ps_sales', sales);
   cart = []; saveCart(); $('#cashInput').value=''; renderCart(); renderSales();
   openSheet(`<h2>Sale complete ✓</h2><div class="salebox">${sale.items.map(i => `<div class="line"><span>${i.qty} × ${esc(i.name)}</span><span>${peso(i.price*i.qty)}</span></div>`).join('')}
     <div class="line" style="border-top:1px dashed var(--line);margin-top:6px;padding-top:8px;font-weight:700"><span>Total</span><span>${peso(sale.total)}</span></div>
     ${sale.cash?`<div class="line"><span>Cash</span><span>${peso(sale.cash)}</span></div><div class="line" style="font-size:20px;font-weight:800;color:var(--brand)"><span>Change</span><span>${peso(sale.change)}</span></div>`:''}</div>
-    <button class="btn block" id="nextSale" style="margin-top:14px">Next customer</button>`);
-  $('#nextSale').addEventListener('click', () => { closeSheet(); setMode('cart'); go('scan'); $('#resultBox').innerHTML=''; startScan(); });
+    <div class="actions"><button class="btn block" id="nextSale">Next customer</button>${hasPrinter() ? '<button class="btn ghost" id="printAgain">🖨 Print receipt</button>' : ''}</div>`);
+  $('#nextSale').addEventListener('click', () => { closeSheet(); setMode('cart'); go('scan'); $('#resultBox').innerHTML=''; if (settings.autoCam) startScan(); });
+  $('#printAgain')?.addEventListener('click', () => printReceipt(sale));
+  if (hasPrinter() && settings.autoPrint) printReceipt(sale);
+  renderStock();
 }
 
 // ---------------- Lists ----------------
@@ -510,7 +642,7 @@ function renderManual(){
   if (!q || /^\d{6,}$/.test(q)){ ul.innerHTML=''; return; }
   ul.innerHTML = search(q).slice(0,8).map(p => `<li class="item" data-id="${esc(p.id)}"><div class="grow"><div class="t">${esc(p.name)}</div><div class="s">${esc([p.brand,p.size].filter(Boolean).join(' · '))}</div></div><div class="p">${peso(p.price)}</div></li>`).join('') || '<li class="empty">No matching product.</li>';
 }
-function renderAll(){ renderProducts(); renderCart(); renderManual(); }
+function renderAll(){ renderProducts(); renderCart(); renderManual(); renderStock(); }
 
 // ---------------- Dialogs ----------------
 let reopenEdit = null;
@@ -557,7 +689,7 @@ function openEdit(p, isNew){
       </div>
       <div class="grid2">
         <div class="field"><p class="label">Category</p><input class="input" name="category" value="${esc(draft.category)}"></div>
-        <div class="field"><p class="label">Qty</p><input class="input" name="qty" inputmode="numeric" value="${esc(draft.qty ?? '')}"></div>
+        <div class="field"><p class="label">Pieces per box (Qty)</p><input class="input" name="qty" inputmode="numeric" value="${esc(draft.qty ?? '')}"></div>
       </div>
       ${sheetTabs.length ? `<div class="field"><p class="label">Sheet tab</p><select class="input" name="tab">${['', ...sheetTabs].map(t => `<option value="${esc(t)}" ${t===(draft.tab||'')?'selected':''}>${t ? esc(t) : 'Automatic (by category)'}</option>`).join('')}</select></div>` : '<input type="hidden" name="tab" value="">'}
       <div class="field"><p class="label">Barcode(s)</p>
@@ -623,7 +755,7 @@ async function readAllTabs(){
     if (r.rows.length){ r.rows.forEach(x => x.tab = name); found.push({name, rows:r.rows}); }
   }
   // A search/lookup tab only repeats rows from the real tabs — skip it when other tabs have products.
-  const isSearch = n => /search|lookup|dashboard/i.test(n);
+  const isSearch = n => /search|lookup|dashboard|^sales$|stock log/i.test(n);
   const use = found.some(f => !isSearch(f.name)) ? found.filter(f => !isSearch(f.name)) : found;
   sheetTabs = use.map(f => f.name); ls.set('ps_tabs', sheetTabs);
   const rows = [].concat(...use.map(f => f.rows));
@@ -658,7 +790,7 @@ function parseTable(text){
   if (hi < 0) return {rows:[], error:'Couldn’t find the header row (needs a “Product” column and a “Selling Price” column).'};
   const H = split(lines[hi]).map(h => h.trim().toLowerCase());
   const col = (...keys) => H.findIndex(h => keys.some(k => h.includes(k)));
-  const ci = {category:col('category'), name:H.findIndex(h => h==='product'||h==='product name'||h==='item'), brand:col('brand'), size:col('size','unit'), qty:col('qty','quantity'), cost:col('cost'), price:col('selling','srp','retail'), barcode:col('barcode','upc','ean')};
+  const ci = {category:col('category'), name:H.findIndex(h => h==='product'||h==='product name'||h==='item'), brand:col('brand'), size:col('size','unit'), qty:col('qty','quantity'), cost:col('cost'), price:col('selling','srp','retail'), barcode:col('barcode','upc','ean'), stock:col('stock','on hand','inventory'), reorder:col('reorder','low stock')};
   if (ci.price < 0) ci.price = H.findIndex((h,i) => h.includes('price') && i!==ci.cost);
   const num = v => { const n = parseFloat(String(v||'').replace(/[^\d.\-]/g,'')); return isNaN(n) ? null : n; };
   const rows = [];
@@ -666,7 +798,7 @@ function parseTable(text){
     const c = split(l), g = i => i>=0 ? String(c[i]||'').trim() : '';
     const name = g(ci.name), price = num(g(ci.price));
     if (!name || price==null) continue;
-    rows.push({category:g(ci.category), name, brand:g(ci.brand), size:g(ci.size), qty:num(g(ci.qty)), cost:num(g(ci.cost)), price, barcode:g(ci.barcode).replace(/^'/,'').replace(/\.0+$/,'')});
+    rows.push({category:g(ci.category), name, brand:g(ci.brand), size:g(ci.size), qty:num(g(ci.qty)), cost:num(g(ci.cost)), price, barcode:g(ci.barcode).replace(/^'/,'').replace(/\.0+$/,''), stock: ci.stock>=0 ? num(g(ci.stock)) : null, reorder: ci.reorder>=0 ? num(g(ci.reorder)) : null});
   }
   return {rows};
 }
@@ -725,7 +857,9 @@ function openSheetSettings(){
     if (!writeUrl){ toast('Write link removed'); renderQueue(); return; }
     if (!/^https:\/\/script\.google\.com\/.*\/exec/.test(writeUrl)){ toast('That doesn’t look like a web app link (it should end with /exec)'); return; }
     toast('Testing link…');
-    try{ const r = await postJson(writeUrl, {action:'ping'}); if (r.ok){ if (r.tabs) { sheetTabs = r.tabs; ls.set('ps_tabs', sheetTabs); } toast('Connected ✓ — tabs: ' + (r.tabs||[]).join(', ')); flushQueue(); } else toast('Link answered with an error: ' + r.error); }
+    try{ const r = await postJson(writeUrl, {action:'ping'}); if (r.ok){ if (r.tabs) { sheetTabs = r.tabs; ls.set('ps_tabs', sheetTabs); }
+      if ((r.version||1) < 2) toast('Connected, but the sheet script is old — update it (Setup steps → “Updating the script”) to record sales & stock.');
+      else toast('Connected ✓ — tabs: ' + (r.tabs||[]).join(', ')); flushQueue(); } else toast('Link answered with an error: ' + r.error); }
     catch(e){ toast('Couldn’t reach the link: ' + e.message); }
   });
   $('#setupHelp').addEventListener('click', openSetupHelp);
@@ -742,7 +876,8 @@ function openSheetSettings(){
 }
 async function openSetupHelp(){
   let code = '';
-  try{ code = await fetch('Code.gs').then(r => r.text()); }catch(e){}
+  try{ code = await fetchText('https://raw.githubusercontent.com/rentschlerm/price-scanner/main/apps-script/Code.gs?t=' + Date.now()); if (!/SCRIPT_VERSION/.test(code)) code = ''; }catch(e){ code = ''; }
+  if (!code){ try{ code = await fetch('Code.gs').then(r => r.text()); }catch(e){} }
   openSheet(`<h2>Connect the app to your sheet (once)</h2>
     <p class="hint" style="margin-top:0">Easiest on a computer. Takes about 3 minutes.</p>
     <ol class="hint" style="padding-left:18px">
@@ -752,7 +887,8 @@ async function openSetupHelp(){
       <li>Set <b>Execute as: Me</b> and <b>Who has access: Anyone</b>. Click <b>Deploy</b>, then <b>Authorize access</b> and allow it (choose your account → Advanced → Go to project).</li>
       <li>Copy the <b>Web app URL</b> (ends with <b>/exec</b>), paste it into <b>Sheet write link</b> here, and tap <b>Save &amp; test link</b>.</li>
     </ol>
-    <p class="hint">The script only adds or updates product rows (and adds a “Barcode” column where a tab has none). It never touches formulas or a tab with “search” in its name.</p>
+    <p class="hint"><b>Updating the script</b> (when the app asks): paste the new script the same way and Save, then <b>Deploy → Manage deployments → ✏ Edit → Version: New version → Deploy</b>. The link stays the same.</p>
+    <p class="hint">The script only adds or updates product rows, records sales in a <b>Sales</b> tab and stock changes in a <b>Stock Log</b> tab (and adds a “Barcode” column where a tab has none). It never touches formulas or a tab with “search” in its name.</p>
     <div class="actions"><button class="btn" id="copyScript" ${code?'':'disabled'}>Copy script</button><button class="btn plain" id="helpClose">Back</button></div>`);
   $('#copyScript').addEventListener('click', e => copyText(code).then(() => { e.currentTarget.textContent = 'Copied ✓'; }, () => toast('Copy failed')));
   $('#helpClose').addEventListener('click', openSheetSettings);
@@ -804,20 +940,28 @@ function toast(msg, actLabel, act){
   b.onclick = () => { $('#toast').classList.remove('show'); act && act(); };
   $('#toast').classList.add('show'); clearTimeout(tt); tt = setTimeout(() => $('#toast').classList.remove('show'), 3500);
 }
+const WIDE = () => window.matchMedia('(min-width: 1000px)').matches;
 function go(v){
+  if (v==='cart' && WIDE()){ v='scan'; setTimeout(() => $('#cashInput').focus(), 50); }
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id==='view-'+v));
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.view===v));
   if (v!=='scan' && scanning) stopScan();
   window.scrollTo(0,0); renderCart();
 }
-document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => { go(b.dataset.view); if (b.dataset.view==='scan') startScan(); }));
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => { go(b.dataset.view); if (b.dataset.view==='scan' && settings.autoCam) startScan(); }));
 function setMode(m){
   scanMode = m; ls.set('ps_mode', m);
-  $('#modeCheck').classList.toggle('on', m==='check'); $('#modeCart').classList.toggle('on', m==='cart');
+  $('#modeCheck').classList.toggle('on', m==='check'); $('#modeCart').classList.toggle('on', m==='cart'); $('#modeRecv').classList.toggle('on', m==='recv');
   renderCart();
 }
 $('#modeCheck').addEventListener('click', () => setMode('check'));
 $('#modeCart').addEventListener('click', () => setMode('cart'));
+$('#modeRecv').addEventListener('click', () => setMode('recv'));
+$('#stockRecvBtn').addEventListener('click', () => { setMode('recv'); go('scan'); startScan(); toast('Scan each delivered product'); });
+$('#stockStats').addEventListener('click', e => { const d = e.target.closest('[data-f]'); if (d){ stockFilter = d.dataset.f; renderStock(); } });
+$('#stockSearch').addEventListener('input', renderStock);
+$('#stockList').addEventListener('click', e => { const li = e.target.closest('.item'); if (li && li.dataset.id){ const p = byId(li.dataset.id); p && openStock(p); } });
+$('#setBtn').addEventListener('click', openSettings);
 
 $('#startBtn').addEventListener('click', startScan);
 $('#stopBtn').addEventListener('click', () => stopScan());
@@ -856,14 +1000,118 @@ window.__onBack = () => { if ($('#sheetBg').classList.contains('open')){ closeSh
 if (NATIVE_CAM){ $('#cam').classList.add('native'); $('#camSub').textContent = 'Point the camera at a barcode — it scans automatically. Tap the picture to focus.'; }
 setMode(scanMode);
 renderAll(); renderSales();
-syncSheet(true).then(() => flushQueue());
+flushQueue().then(() => syncSheet(true)).then(() => flushQueue());
+// ----- Settings: device, scanner, receipt printer -----
+const hasPrinter = () => !!(settings.printer && Native && Native.printReceipt);
+function receiptText(sale){
+  const W = Number(settings.paper) === 80 ? 48 : 32;
+  const ascii = t => String(t||'').replace(/₱/g,'P').normalize('NFKD').replace(/[^\x20-\x7E]/g,'');
+  const money = n => 'P' + (Number(n)||0).toFixed(2);
+  const lr = (l, r) => { l = ascii(l); r = ascii(r); const space = W - r.length - 1; if (l.length > space) l = l.slice(0, space); return l + ' '.repeat(W - l.length - r.length) + r; };
+  const wrap = t => { t = ascii(t); const out = []; while (t.length > W){ let i = t.lastIndexOf(' ', W); if (i < 10) i = W; out.push(t.slice(0,i)); t = t.slice(i).trim(); } out.push(t); return out; };
+  const L = [];
+  if (settings.storeName) L.push('[C][B]' + ascii(settings.storeName));
+  if (settings.storeLine) wrap(settings.storeLine).forEach(x => L.push('[C]' + x));
+  const d = new Date(sale.at);
+  L.push('[C]' + d.toLocaleDateString('en-PH') + ' ' + d.toLocaleTimeString('en-PH', {hour:'2-digit', minute:'2-digit'}));
+  L.push('[C]Sale ' + sale.id);
+  L.push('-'.repeat(W));
+  sale.items.forEach(i => { wrap(i.name).forEach(x => L.push(x)); L.push(lr(`  ${i.qty} x ${money(i.price)}`, money(i.price*i.qty))); });
+  L.push('-'.repeat(W));
+  L.push('[B]' + lr('TOTAL', money(sale.total)));
+  if (sale.cash){ L.push(lr('Cash', money(sale.cash))); L.push('[B]' + lr('Change', money(sale.change))); }
+  L.push(lr('Items', String(sale.count)));
+  if (settings.footer){ L.push(''); wrap(settings.footer).forEach(x => L.push('[C]' + x)); }
+  return L.join('\n');
+}
+function printReceipt(sale){
+  if (!hasPrinter()){ toast('No printer set up — ⚙ Settings → Receipt printer'); return; }
+  toast('Printing…');
+  const id = 'c' + (++cbN);
+  cbs[id] = (ok, msg) => toast(ok ? 'Receipt printed ✓' : 'Print failed: ' + msg + ' — is the printer on and paired?');
+  Native.printReceipt(settings.printer, receiptText(sale), id);
+}
+function openSettings(){
+  const btOk = !!(Native && Native.listPrinters);
+  openSheet(`<h2>Settings</h2>
+    <div class="field"><p class="label">This device’s name</p><input class="input" id="stDevice" value="${esc(settings.device)}" placeholder="e.g. Counter tablet"></div>
+    <p class="hint" style="margin-top:-6px">Shown in the sheet’s Sales and Stock Log tabs, so you know which device made each sale.</p>
+    <label class="switch"><span><b>Start camera automatically</b><br><span class="hint">Turn off when you use a USB/Bluetooth barcode scanner.</span></span><input type="checkbox" id="stCam" ${settings.autoCam?'checked':''}></label>
+    <div class="field" style="margin-top:12px"><p class="label">Default “low stock” level (pieces)</p><input class="input" id="stReorder" inputmode="numeric" value="${esc(settings.reorderDefault)}"></div>
+    <h2 style="font-size:16px;margin-top:18px">Barcode scanner (USB / Bluetooth)</h2>
+    <p class="hint" style="margin-top:0">Plug in or pair the scanner — no setup needed. Scan anywhere in the app (not while typing in a box). Test it here:</p>
+    <input class="input" id="stScanTest" placeholder="Tap here and scan a barcode">
+    <h2 style="font-size:16px;margin-top:18px">Receipt printer (Bluetooth)</h2>
+    ${btOk ? `<p class="hint" style="margin-top:0">First pair the printer in Android Settings → Bluetooth (PIN is usually 0000 or 1234). Then choose it here.</p>
+    <div class="row"><select class="input" id="stPrinter"><option value="">${settings.printer ? esc(settings.printerName || settings.printer) : 'No printer'}</option></select><button class="btn ghost" id="stFind">Find</button></div>
+    <div class="grid2" style="margin-top:10px">
+      <div class="field"><p class="label">Paper width</p><select class="input" id="stPaper"><option value="58" ${Number(settings.paper)===58?'selected':''}>58 mm</option><option value="80" ${Number(settings.paper)===80?'selected':''}>80 mm</option></select></div>
+      <label class="switch" style="border:0"><span><b>Print after every sale</b></span><input type="checkbox" id="stAuto" ${settings.autoPrint?'checked':''}></label>
+    </div>
+    <div class="field"><p class="label">Store name (top of receipt)</p><input class="input" id="stName" value="${esc(settings.storeName)}"></div>
+    <div class="field"><p class="label">Address / contact line</p><input class="input" id="stLine" value="${esc(settings.storeLine)}"></div>
+    <div class="field"><p class="label">Footer</p><input class="input" id="stFooter" value="${esc(settings.footer)}"></div>
+    <button class="btn ghost block" id="stTest">🖨 Test print</button>` : `<p class="hint">Update the app (yellow Update bar) to use a receipt printer.</p>`}
+    <div class="actions"><button class="btn" id="stSave">Save</button><button class="btn plain" id="stCancel">Close</button></div>`);
+  const collect = () => {
+    settings.device = $('#stDevice').value.trim() || settings.device;
+    settings.autoCam = $('#stCam').checked;
+    settings.reorderDefault = parseInt($('#stReorder').value,10) || 0;
+    if (btOk){
+      const sel = $('#stPrinter');
+      if (sel.value){ settings.printer = sel.value; settings.printerName = sel.options[sel.selectedIndex].text; }
+      settings.paper = Number($('#stPaper').value); settings.autoPrint = $('#stAuto').checked;
+      settings.storeName = $('#stName').value.trim(); settings.storeLine = $('#stLine').value.trim(); settings.footer = $('#stFooter').value.trim();
+    }
+    saveSettings();
+  };
+  $('#stScanTest').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); toast('Scanner works ✓ — read ' + e.target.value); e.target.value=''; } });
+  if (btOk){
+    $('#stFind').addEventListener('click', () => {
+      const id = 'c' + (++cbN);
+      cbs[id] = (ok, txt) => {
+        if (!ok){ toast(txt === 'permission' ? 'Allow “Nearby devices” for Price Scanner, then tap Find again' : 'Bluetooth: ' + txt); return; }
+        let list = []; try{ list = JSON.parse(txt); }catch(e){}
+        const sel = $('#stPrinter');
+        sel.innerHTML = '<option value="">No printer</option>' + list.map(d => `<option value="${esc(d.address)}" ${d.address===settings.printer?'selected':''}>${esc(d.name || d.address)}</option>`).join('');
+        toast(list.length ? `${list.length} paired device${list.length===1?'':'s'} found — choose your printer` : 'No paired devices. Pair the printer in Android Bluetooth settings first.');
+      };
+      Native.listPrinters(id);
+    });
+    $('#stTest').addEventListener('click', () => {
+      collect();
+      printReceipt({id:'TEST', at:Date.now(), total:25, count:2, cash:50, change:25, items:[{name:'Test item', price:12.5, qty:2}]});
+    });
+  }
+  $('#stSave').addEventListener('click', () => { collect(); closeSheet(); toast('Settings saved'); renderStock(); });
+  $('#stCancel').addEventListener('click', closeSheet);
+}
+
+// ----- USB / Bluetooth barcode scanner (types like a fast keyboard + Enter) -----
+(() => {
+  let buf = '', last = 0;
+  document.addEventListener('keydown', e => {
+    const t = e.target, tag = t && t.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return; // typing in a box: leave it alone
+    const now = Date.now();
+    if (e.key === 'Enter'){
+      if (buf.length >= 4 && now - last < 150){ e.preventDefault(); onDecoded(buf); }
+      buf = ''; return;
+    }
+    if (e.key && e.key.length === 1){
+      if (now - last > 150) buf = '';
+      buf += e.key; last = now;
+    }
+  }, true);
+})();
+
 // ----- Self-update -----
 window.__onUiUpdated = () => toast('App updated', 'Reload now', () => location.reload());
 window.__onAppUpdate = tag => { $('#updBar').style.display = 'flex'; $('#updMsg').textContent = `New app version ${tag} is ready.`; };
 window.__onUpdateStatus = msg => { $('#updBar').style.display = 'flex'; $('#updMsg').textContent = msg; };
 $('#updBtn').addEventListener('click', () => { if (Native && Native.installUpdate) Native.installUpdate(); });
 if (Native && Native.checkForUpdates) setTimeout(() => Native.checkForUpdates(), 1500);
-setTimeout(startScan, 300);
+if (settings.autoCam) setTimeout(startScan, 300); else window.__onCameraState && NATIVE_CAM && window.__onCameraState(false);
 })();
 </script>
 </body>

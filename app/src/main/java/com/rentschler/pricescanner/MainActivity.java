@@ -1,6 +1,11 @@
 package com.rentschler.pricescanner;
 
 import android.Manifest;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothSocket;
+import android.content.pm.ActivityInfo;
 import android.annotation.SuppressLint;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -71,6 +76,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import org.json.JSONArray;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
@@ -80,6 +88,9 @@ import java.util.concurrent.TimeUnit;
 public class MainActivity extends ComponentActivity {
     private static final String APP_HOST = "appassets.androidplatform.net";
     private static final int REQ_CAMERA = 1;
+    private static final int REQ_BT = 2;
+    private static final UUID SPP = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+    private String pendingBtCallback = null;
     private static final String REPO = "rentschlerm/price-scanner";
     private static final String UI_URL = "https://raw.githubusercontent.com/" + REPO + "/main/app/src/main/assets/index.html";
     private static final String RELEASE_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -116,6 +127,9 @@ public class MainActivity extends ComponentActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Phones stay in portrait; tablets can rotate (landscape counter use).
+        setRequestedOrientation(getResources().getConfiguration().smallestScreenWidthDp >= 600
+                ? ActivityInfo.SCREEN_ORIENTATION_FULL_USER : ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -124,7 +138,7 @@ public class MainActivity extends ComponentActivity {
         // ----- Native camera area (shown only while scanning) -----
         camBox = new FrameLayout(this);
         camBox.setBackgroundColor(Color.BLACK);
-        int camHeight = (int) (getResources().getDisplayMetrics().heightPixels * 0.34f);
+        int camHeight = (int) (Math.min(getResources().getDisplayMetrics().heightPixels, getResources().getDisplayMetrics().widthPixels) * 0.34f);
         root.addView(camBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, camHeight));
         camBox.setVisibility(View.GONE);
 
@@ -240,6 +254,9 @@ public class MainActivity extends ComponentActivity {
                         Barcode.FORMAT_CODABAR, Barcode.FORMAT_QR_CODE, Barcode.FORMAT_DATA_MATRIX)
                 .build());
 
+        web.setFocusable(true);
+        web.setFocusableInTouchMode(true);
+        web.requestFocus();
         web.loadUrl("https://" + APP_HOST + "/assets/index.html");
     }
 
@@ -437,6 +454,15 @@ public class MainActivity extends ComponentActivity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        if (requestCode == REQ_BT) {
+            if (pendingBtCallback != null) {
+                String cb = pendingBtCallback;
+                pendingBtCallback = null;
+                if (granted) bridge.listPrinters(cb);
+                else bridge.callback(cb, false, "permission");
+            }
+            return;
+        }
         if (pendingRequest != null) {
             if (granted) pendingRequest.grant(pendingRequest.getResources());
             else pendingRequest.deny();
@@ -532,6 +558,93 @@ public class MainActivity extends ComponentActivity {
         @JavascriptInterface
         public void installUpdate() { downloadAndInstall(); }
 
+        private BluetoothAdapter adapter() {
+            BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+            return bm != null ? bm.getAdapter() : null;
+        }
+
+        private boolean btAllowed() {
+            return Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+        }
+
+        @SuppressLint("MissingPermission")
+        @JavascriptInterface
+        public void listPrinters(final String callbackId) {
+            if (!btAllowed()) {
+                pendingBtCallback = callbackId;
+                runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, REQ_BT));
+                return;
+            }
+            try {
+                BluetoothAdapter ad = adapter();
+                if (ad == null) { callback(callbackId, false, "this device has no Bluetooth"); return; }
+                if (!ad.isEnabled()) { callback(callbackId, false, "turn Bluetooth on first"); return; }
+                JSONArray arr = new JSONArray();
+                Set<BluetoothDevice> bonded = ad.getBondedDevices();
+                if (bonded != null) for (BluetoothDevice d : bonded) {
+                    JSONObject o = new JSONObject();
+                    o.put("name", d.getName() == null ? d.getAddress() : d.getName());
+                    o.put("address", d.getAddress());
+                    arr.put(o);
+                }
+                callback(callbackId, true, arr.toString());
+            } catch (Exception e) {
+                callback(callbackId, false, String.valueOf(e.getMessage()));
+            }
+        }
+
+        /** Prints plain text on an ESC/POS Bluetooth receipt printer. Lines may start with [C] (center) and/or [B] (bold). */
+        @SuppressLint("MissingPermission")
+        @JavascriptInterface
+        public void printReceipt(final String address, final String text, final String callbackId) {
+            if (!btAllowed()) { callback(callbackId, false, "allow Nearby devices permission (Settings → Find)"); return; }
+            new Thread(() -> {
+                BluetoothSocket sock = null;
+                try {
+                    BluetoothAdapter ad = adapter();
+                    if (ad == null || !ad.isEnabled()) throw new Exception("Bluetooth is off");
+                    ad.cancelDiscovery();
+                    BluetoothDevice dev = ad.getRemoteDevice(address);
+                    try {
+                        sock = dev.createRfcommSocketToServiceRecord(SPP);
+                        sock.connect();
+                    } catch (Exception first) {
+                        try { if (sock != null) sock.close(); } catch (Exception ignored) { }
+                        sock = dev.createInsecureRfcommSocketToServiceRecord(SPP);
+                        sock.connect();
+                    }
+                    OutputStream os = sock.getOutputStream();
+                    ByteArrayOutputStream b = new ByteArrayOutputStream();
+                    b.write(new byte[]{0x1B, 0x40});            // init
+                    for (String raw : text.split("\n", -1)) {
+                        String line = raw;
+                        boolean center = false, bold = false;
+                        boolean again = true;
+                        while (again) {
+                            again = false;
+                            if (line.startsWith("[C]")) { center = true; line = line.substring(3); again = true; }
+                            if (line.startsWith("[B]")) { bold = true; line = line.substring(3); again = true; }
+                        }
+                        b.write(new byte[]{0x1B, 0x61, (byte) (center ? 1 : 0)});
+                        b.write(new byte[]{0x1B, 0x45, (byte) (bold ? 1 : 0)});
+                        b.write(line.getBytes(StandardCharsets.US_ASCII));
+                        b.write(0x0A);
+                    }
+                    b.write(new byte[]{0x1B, 0x61, 0, 0x1B, 0x45, 0});
+                    b.write(new byte[]{0x1B, 0x64, 4});         // feed 4 lines
+                    b.write(new byte[]{0x1D, 0x56, 0x42, 0x00}); // cut (ignored by printers without a cutter)
+                    os.write(b.toByteArray());
+                    os.flush();
+                    Thread.sleep(600);
+                    callback(callbackId, true, "ok");
+                } catch (Exception e) {
+                    callback(callbackId, false, e.getMessage() == null ? "could not connect" : e.getMessage());
+                } finally {
+                    try { if (sock != null) sock.close(); } catch (Exception ignored) { }
+                }
+            }).start();
+        }
+
         @JavascriptInterface
         public void startCamera() { runOnUiThread(MainActivity.this::startCameraInternal); }
 
@@ -592,7 +705,7 @@ public class MainActivity extends ComponentActivity {
             });
         }
 
-        private void callback(String id, boolean ok, String result) {
+        void callback(String id, boolean ok, String result) {
             js("window.__nativeCb(" + JSONObject.quote(id) + "," + ok + "," + JSONObject.quote(result) + ")");
         }
 
