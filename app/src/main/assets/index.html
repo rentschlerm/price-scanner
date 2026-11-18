@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Price Scanner</title>
+<meta name="min-native" content="5">
 <script src="zxing.min.js"></script>
 <script src="xlsx.full.min.js"></script>
 <style>
@@ -108,6 +109,7 @@ textarea.input{min-height:120px;font-family:monospace;font-size:13px}
   <button id="sheetBtn">⟳ Sheet</button>
 </header>
 
+<div id="updBar" style="display:none;background:#fef3c7;color:#78350f;padding:10px 16px;font-size:14px;align-items:center;gap:10px"><span id="updMsg" style="flex:1">A new version of the app is ready.</span><button class="btn" id="updBtn" style="padding:8px 14px">Update</button></div>
 <main>
   <section class="view active" id="view-scan">
     <div class="seg">
@@ -855,6 +857,12 @@ if (NATIVE_CAM){ $('#cam').classList.add('native'); $('#camSub').textContent = '
 setMode(scanMode);
 renderAll(); renderSales();
 syncSheet(true).then(() => flushQueue());
+// ----- Self-update -----
+window.__onUiUpdated = () => toast('App updated', 'Reload now', () => location.reload());
+window.__onAppUpdate = tag => { $('#updBar').style.display = 'flex'; $('#updMsg').textContent = `New app version ${tag} is ready.`; };
+window.__onUpdateStatus = msg => { $('#updBar').style.display = 'flex'; $('#updMsg').textContent = msg; };
+$('#updBtn').addEventListener('click', () => { if (Native && Native.installUpdate) Native.installUpdate(); });
+if (Native && Native.checkForUpdates) setTimeout(() => Native.checkForUpdates(), 1500);
 setTimeout(startScan, 300);
 })();
 </script>

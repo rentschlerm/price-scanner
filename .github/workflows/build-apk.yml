@@ -3,6 +3,10 @@ name: Build APK
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'app/src/main/assets/index.html'
+      - 'apps-script/**'
+      - 'README.md'
   workflow_dispatch:
 
 permissions:

@@ -6,6 +6,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -14,7 +15,9 @@ import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.media.Image;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.os.SystemClock;
 import android.util.Size;
 import android.util.TypedValue;
@@ -46,6 +49,7 @@ import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.webkit.WebViewAssetLoader;
 
 import com.google.common.util.concurrent.ListenableFuture;
@@ -58,12 +62,17 @@ import com.google.mlkit.vision.common.InputImage;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -71,6 +80,12 @@ import java.util.concurrent.TimeUnit;
 public class MainActivity extends ComponentActivity {
     private static final String APP_HOST = "appassets.androidplatform.net";
     private static final int REQ_CAMERA = 1;
+    private static final String REPO = "rentschlerm/price-scanner";
+    private static final String UI_URL = "https://raw.githubusercontent.com/" + REPO + "/main/app/src/main/assets/index.html";
+    private static final String RELEASE_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
+
+    private String updateApkUrl = null;
+    private boolean pendingInstall = false;
 
     private WebView web;
     private FrameLayout camBox;
@@ -78,6 +93,7 @@ public class MainActivity extends ComponentActivity {
     private AimView aimView;
     private TextView torchBtn, zoomBtn;
     private PermissionRequest pendingRequest;
+    private final Bridge bridge = new Bridge();
 
     private ProcessCameraProvider cameraProvider;
     private Camera camera;
@@ -185,7 +201,14 @@ public class MainActivity extends ComponentActivity {
         web.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                return loader.shouldInterceptRequest(request.getUrl());
+                Uri u = request.getUrl();
+                if (APP_HOST.equals(u.getHost()) && "/assets/index.html".equals(u.getPath())) {
+                    File f = uiFile();
+                    if (f.exists() && f.length() > 1000) {
+                        try { return new WebResourceResponse("text/html", "utf-8", new FileInputStream(f)); } catch (Exception ignored) { }
+                    }
+                }
+                return loader.shouldInterceptRequest(u);
             }
 
             @Override
@@ -209,7 +232,7 @@ public class MainActivity extends ComponentActivity {
                 });
             }
         });
-        web.addJavascriptInterface(new Bridge(), "AndroidBridge");
+        web.addJavascriptInterface(bridge, "AndroidBridge");
 
         scanner = BarcodeScanning.getClient(new BarcodeScannerOptions.Builder()
                 .setBarcodeFormats(Barcode.FORMAT_EAN_13, Barcode.FORMAT_EAN_8, Barcode.FORMAT_UPC_A, Barcode.FORMAT_UPC_E,
@@ -218,6 +241,104 @@ public class MainActivity extends ComponentActivity {
                 .build());
 
         web.loadUrl("https://" + APP_HOST + "/assets/index.html");
+    }
+
+    // ---------------- Self-update ----------------
+    private File uiFile() { return new File(getFilesDir(), "ui/index.html"); }
+
+    private int nativeVersion() {
+        try {
+            PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return Build.VERSION.SDK_INT >= 28 ? (int) pi.getLongVersionCode() : pi.versionCode;
+        } catch (Exception e) { return 0; }
+    }
+
+    private static int minNative(String html) {
+        Matcher m = Pattern.compile("name=\"min-native\"\\s+content=\"(\\d+)\"").matcher(html);
+        return m.find() ? Integer.parseInt(m.group(1)) : 0;
+    }
+
+    /** Downloads the newest screen (index.html) from GitHub; it is used from the next reload. */
+    private void checkUiUpdate() {
+        try {
+            String html = new String(bridge.request(UI_URL + "?t=" + System.currentTimeMillis(), null), StandardCharsets.UTF_8);
+            if (!html.contains("<html") || !html.contains("</html>") || !html.contains("Price Scanner")) return;
+            if (minNative(html) > nativeVersion()) return; // needs a newer app; the update button handles that
+            File f = uiFile();
+            String current = null;
+            if (f.exists()) {
+                try (FileInputStream in = new FileInputStream(f)) { current = new String(readAll(in), StandardCharsets.UTF_8); }
+            } else {
+                try (InputStream in = getAssets().open("index.html")) { current = new String(readAll(in), StandardCharsets.UTF_8); }
+            }
+            if (html.equals(current)) return;
+            File dir = f.getParentFile();
+            if (dir != null && !dir.exists()) dir.mkdirs();
+            File tmp = new File(dir, "index.tmp");
+            try (FileOutputStream out = new FileOutputStream(tmp)) { out.write(html.getBytes(StandardCharsets.UTF_8)); }
+            if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f); }
+            js("window.__onUiUpdated && window.__onUiUpdated()");
+        } catch (Exception ignored) { }
+    }
+
+    /** Checks GitHub Releases for a newer APK. */
+    private void checkAppUpdate() {
+        try {
+            JSONObject rel = new JSONObject(new String(bridge.request(RELEASE_API, null), StandardCharsets.UTF_8));
+            String tag = rel.optString("tag_name", "");
+            Matcher m = Pattern.compile("(\\d+)$").matcher(tag);
+            if (!m.find()) return;
+            int latest = Integer.parseInt(m.group(1));
+            if (latest <= nativeVersion()) return;
+            org.json.JSONArray assets = rel.optJSONArray("assets");
+            if (assets == null) return;
+            for (int i = 0; i < assets.length(); i++) {
+                JSONObject a = assets.getJSONObject(i);
+                if (a.optString("name").endsWith(".apk")) { updateApkUrl = a.optString("browser_download_url"); break; }
+            }
+            if (updateApkUrl != null) js("window.__onAppUpdate && window.__onAppUpdate(" + JSONObject.quote(tag) + ")");
+        } catch (Exception ignored) { }
+    }
+
+    private File updateFile() { return new File(getCacheDir(), "update.apk"); }
+
+    private void downloadAndInstall() {
+        if (updateApkUrl == null) return;
+        new Thread(() -> {
+            try {
+                js("window.__onUpdateStatus && window.__onUpdateStatus('Downloading update…')");
+                byte[] data = bridge.request(updateApkUrl, null);
+                try (FileOutputStream out = new FileOutputStream(updateFile())) { out.write(data); }
+                runOnUiThread(this::launchInstaller);
+            } catch (Exception e) {
+                js("window.__onUpdateStatus && window.__onUpdateStatus('Update download failed — check internet and try again')");
+            }
+        }).start();
+    }
+
+    private void launchInstaller() {
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            pendingInstall = true;
+            js("window.__onUpdateStatus && window.__onUpdateStatus('Allow “Install unknown apps” for Price Scanner, then come back')");
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+            } catch (Exception ignored) { }
+            return;
+        }
+        pendingInstall = false;
+        Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".files", updateFile());
+        Intent i = new Intent(Intent.ACTION_VIEW);
+        i.setDataAndType(uri, "application/vnd.android.package-archive");
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(i);
+    }
+
+    private static byte[] readAll(InputStream in) throws java.io.IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        return bos.toByteArray();
     }
 
     private TextView pill(String text) {
@@ -348,6 +469,7 @@ public class MainActivity extends ComponentActivity {
     protected void onResume() {
         super.onResume();
         web.onResume();
+        if (pendingInstall && updateFile().exists()) launchInstaller();
     }
 
     @Override
@@ -398,6 +520,17 @@ public class MainActivity extends ComponentActivity {
     private class Bridge {
         @JavascriptInterface
         public boolean hasNativeScanner() { return true; }
+
+        @JavascriptInterface
+        public int nativeVersion() { return MainActivity.this.nativeVersion(); }
+
+        @JavascriptInterface
+        public void checkForUpdates() {
+            new Thread(() -> { checkUiUpdate(); checkAppUpdate(); }).start();
+        }
+
+        @JavascriptInterface
+        public void installUpdate() { downloadAndInstall(); }
 
         @JavascriptInterface
         public void startCamera() { runOnUiThread(MainActivity.this::startCameraInternal); }
@@ -464,7 +597,7 @@ public class MainActivity extends ComponentActivity {
         }
 
         /** GET (body == null) or POST, following redirects (POST becomes GET after a redirect, as browsers do). */
-        private byte[] request(String url, String body) throws Exception {
+        byte[] request(String url, String body) throws Exception {
             String current = url;
             String method = body == null ? "GET" : "POST";
             for (int i = 0; i < 8; i++) {
