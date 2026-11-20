@@ -351,7 +351,6 @@ function changeStock(p, {delta, set, reason}){
   const before = hasStock(p) ? Number(p.stock) : 0;
   p.stock = set != null ? Number(set) : before + Number(delta||0);
   persist(); renderAll();
-  if (!writeUrl) return;
   queue.push({id: 'stk-' + newId(), pid: p.id, action:'stock', tab: p.tab||'', match:{name:p.name, brand:p.brand, size:p.size},
     product:{name:p.name, brand:p.brand, size:p.size}, delta: set != null ? null : Number(delta||0), set: set != null ? Number(set) : null,
     reason, at: Date.now(), device: settings.device});
@@ -400,7 +399,14 @@ function openStock(p){
   $('#roGo').addEventListener('click', () => { const v = $('#roIn').value.trim(); saveProduct({...p, reorder: v===''?null:int(v)}); closeSheet(); toast('Reorder level saved'); });
   $('#stClose').addEventListener('click', closeSheet);
 }
-function renderQueue(){ const el = document.getElementById('queueInfo'); if (el) el.textContent = queue.length ? `${queue.length} change${queue.length===1?'':'s'} waiting to be written to the sheet.` : (writeUrl ? 'All changes are in the sheet.' : ''); }
+function renderQueue(){
+  const el = document.getElementById('queueInfo');
+  if (el) el.textContent = !writeUrl ? `No sheet write link on this device — ${queue.length} change${queue.length===1?'':'s'} (sales, GCash, stock) are saved here and will be sent once you add it.`
+    : queue.length ? `${queue.length} change${queue.length===1?'':'s'} waiting to be written to the sheet.` : 'All changes are in the sheet ✓';
+  const b = document.getElementById('sheetBtn');
+  if (b){ const warn = !writeUrl || queue.length; b.textContent = !writeUrl ? '⚠ Sheet link' : queue.length ? `⚠ Sheet (${queue.length})` : '⟳ Sheet';
+    b.style.background = warn ? '#f59e0b' : ''; b.style.color = warn ? '#3b2300' : ''; }
+}
 function deleteProduct(id){ products = products.filter(p => p.id!==id); persist(); renderAll(); }
 
 // Service lines (printing, photocopy…) use ids like "svc-xerox@3" = service id @ price per unit.
@@ -720,7 +726,7 @@ function openGcash(type){
       amount: c.amt, fee: c.fee, feeHow: c.how, cashDelta: Math.round(c.cashDelta*100)/100, walletDelta: Math.round(c.walletDelta*100)/100,
       ref: $('#gcRef').value.trim(), number: $('#gcNum').value.trim(), device: settings.device};
     gcashLog.push(tx); gcashLog = gcashLog.filter(x => x.at > Date.now() - 60*86400000); ls.set('ps_gcash', gcashLog);
-    if (writeUrl){ queue.push({id:'gc-' + tx.id, action:'gcash', tx}); ls.set('ps_queue', queue); flushQueue(); }
+    queue.push({id:'gc-' + tx.id, action:'gcash', tx}); ls.set('ps_queue', queue); flushQueue();
     renderSales(); closeSheet();
     toast(`GCash ${type==='in'?'cash-in':'cash-out'} recorded · fee ${peso(tx.fee)}`, hasPrinter() ? 'Print' : '', hasPrinter() ? () => printText(gcashReceipt(tx)) : null);
   });
@@ -743,7 +749,7 @@ function completeSale(){
   // Stock goes down right away on this device; the sheet is updated in the background.
   lines.forEach(l => { const p = byId(l.id); if (p && hasStock(p)) p.stock = Number(p.stock) - l.qty; });
   persist();
-  if (writeUrl){ queue.push({id:'sale-' + sale.id, action:'sale', sale}); ls.set('ps_queue', queue); flushQueue(); }
+  queue.push({id:'sale-' + sale.id, action:'sale', sale}); ls.set('ps_queue', queue); flushQueue();
   sales.push(sale); sales = sales.filter(x => x.at > Date.now() - 60*86400000); ls.set('ps_sales', sales);
   cart = []; saveCart(); $('#cashInput').value=''; renderCart(); renderSales();
   openSheet(`<h2>Sale complete ✓</h2><div class="salebox">${sale.items.map(i => `<div class="line"><span>${i.qty} × ${esc(i.name)}</span><span>${peso(i.price*i.qty)}</span></div>`).join('')}
@@ -978,6 +984,8 @@ function openSheetSettings(){
     <p class="hint" id="queueInfo"></p>
     <div class="actions"><button class="btn" id="writeSave">Save &amp; test link</button><button class="btn ghost" id="setupHelp">Setup steps</button></div>
     <div class="actions"><button class="btn plain" id="pushAll">Write all barcodes to sheet</button></div>
+    <div class="actions"><button class="btn plain" id="resendSales">Send this device’s past sales &amp; GCash to sheet</button></div>
+    <p class="hint">Safe to tap more than once — the sheet skips sales it already has.</p>
     <div class="actions"><button class="btn ghost" id="pasteImport">Paste rows instead</button><button class="btn ghost" id="sheetExport">Copy to spreadsheet</button></div>`);
   renderQueue();
   $('#writeSave').addEventListener('click', async () => {
@@ -991,6 +999,21 @@ function openSheetSettings(){
     catch(e){ toast('Couldn’t reach the link: ' + e.message); }
   });
   $('#setupHelp').addEventListener('click', openSetupHelp);
+  $('#resendSales').addEventListener('click', () => {
+    let changed = false, n = 0;
+    sales.forEach(x => {
+      if (!x.id){ x.id = 'S' + x.at.toString(36).toUpperCase(); changed = true; } // sales from older versions had no ID
+      if (!x.device) x.device = settings.device;
+      x.items.forEach(i => { if (i.brand === undefined){ const p = products.find(pp => pp.name === i.name); if (p){ i.brand = p.brand||''; i.size = p.size||''; i.tab = p.tab||''; } } });
+      const qid = 'sale-' + x.id;
+      if (!queue.some(q => q.id === qid)){ queue.push({id: qid, action:'sale', sale: x}); n++; }
+    });
+    gcashLog.forEach(tx => { const qid = 'gc-' + tx.id; if (!queue.some(q => q.id === qid)){ queue.push({id: qid, action:'gcash', tx}); n++; } });
+    if (changed) ls.set('ps_sales', sales);
+    ls.set('ps_queue', queue); renderQueue();
+    if (!writeUrl){ toast('Add the sheet write link first, then tap Save & test link'); return; }
+    toast(`Sending ${n} record${n===1?'':'s'}… (already-recorded ones are skipped)`); flushQueue();
+  });
   $('#pushAll').addEventListener('click', () => {
     if (!writeUrl){ toast('Set the sheet write link first'); return; }
     const withCodes = products.filter(p => p.barcode);
@@ -1128,7 +1151,7 @@ window.__onBack = () => { if ($('#sheetBg').classList.contains('open')){ closeSh
 if (NATIVE_CAM){ $('#cam').classList.add('native'); $('#camSub').textContent = 'Point the camera at a barcode — it scans automatically. Tap the picture to focus.'; }
 setMode(scanMode);
 renderQuick();
-renderAll(); renderSales();
+renderAll(); renderSales(); renderQueue();
 flushQueue().then(() => syncSheet(true)).then(() => flushQueue());
 // ----- Settings: device, scanner, receipt printer -----
 const hasPrinter = () => !!(settings.printer && Native && Native.printReceipt);
@@ -1187,6 +1210,7 @@ function openSettings(){
     <p class="hint" style="margin-top:-6px">Shown in the sheet’s Sales and Stock Log tabs, so you know which device made each sale.</p>
     <label class="switch"><span><b>Start camera automatically</b><br><span class="hint">Turn off when you use a USB/Bluetooth barcode scanner.</span></span><input type="checkbox" id="stCam" ${settings.autoCam?'checked':''}></label>
     <div class="field" style="margin-top:12px"><p class="label">Default “low stock” level (pieces)</p><input class="input" id="stReorder" inputmode="numeric" value="${esc(settings.reorderDefault)}"></div>
+    <p class="hint">App version: ${Native && Native.nativeVersion ? '1.0.' + Native.nativeVersion() : 'web'} · write link: ${writeUrl ? 'set ✓' : '<b>not set</b> (⟳ Sheet)'}</p>
     <h2 style="font-size:16px;margin-top:18px">Printing / photocopy prices</h2>
     <div id="stSvcList"></div>
     <button class="btn ghost" id="stSvcAdd" type="button" style="margin-top:6px">+ Add service</button>
