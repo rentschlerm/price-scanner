@@ -115,6 +115,14 @@ textarea.input{min-height:120px;font-family:monospace;font-size:13px}
 .switch{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
 .switch input{width:22px;height:22px}
 .seg3 button{font-size:14px;padding:10px 4px}
+
+.quick{display:flex;gap:8px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none}
+.quick button{flex:0 0 auto;border:1px solid var(--line);background:#fff;border-radius:999px;padding:10px 14px;font-weight:600;font-size:14px;white-space:nowrap}
+.quick button.gc{background:#0a5bd8;color:#fff;border-color:#0a5bd8}
+.big-in{font-size:26px !important;font-weight:800;text-align:right}
+.instr{background:var(--brand-soft);border-radius:14px;padding:14px;margin:12px 0;font-size:15px;line-height:1.5}
+.instr b{font-size:20px}
+.summary .line{display:flex;justify-content:space-between;padding:3px 0;font-size:14px}
 /* ---------- Tablet / wide screen: sale panel always visible on the right ---------- */
 @media (min-width: 1000px){
   main{max-width:1500px;display:grid;grid-template-columns:minmax(0,1.45fr) minmax(380px,1fr);gap:18px;align-items:start;padding-bottom:110px}
@@ -152,6 +160,7 @@ textarea.input{min-height:120px;font-family:monospace;font-size:13px}
       <div class="ctl" id="camCtl" style="display:none"><button id="torchBtn" style="display:none">🔦 Light</button><button id="stopBtn">Pause</button></div>
       <div class="msg" id="camMsg"><button id="startBtn">▶ Start scanning</button><small id="camSub">Point the camera at a barcode — it scans automatically</small></div>
     </div>
+    <div class="quick" id="quickRow"></div>
     <div id="resultBox"></div>
     <div class="card" id="saleOnScan" style="padding:6px 14px;display:none">
       <div class="sectionhead" style="margin:8px 0 2px"><h2 style="font-size:15px">Current sale</h2><button class="btn plain" id="saleOnScanClear" style="padding:6px 12px;font-size:13px">Clear</button></div>
@@ -189,8 +198,9 @@ textarea.input{min-height:120px;font-family:monospace;font-size:13px}
     </div>
     <div class="card salebox" style="margin-top:14px">
       <div class="sectionhead" style="margin:0 0 6px"><h2 style="font-size:16px">Today’s sales</h2><span class="hint" id="todayCount"></span></div>
-      <div class="total"><span class="hint">Total sold today</span><b style="font-size:22px" id="todayTotal">₱0.00</b></div>
-      <div id="todayList" style="margin-top:8px"></div>
+      <div class="total"><span class="hint">Total income today</span><b style="font-size:22px" id="todayTotal">₱0.00</b></div>
+      <div class="summary" id="todaySummary" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)"></div>
+      <div id="todayList" style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)"></div>
     </div>
   </section>
 
@@ -254,7 +264,10 @@ let lastTabs = [];
 let sheetTabs = ls.get('ps_tabs', []);
 let writeUrl = ls.get('ps_writeurl', '');
 let settings = Object.assign({device: (Math.min(screen.width, screen.height) >= 600 ? 'Tablet' : 'Phone'), autoCam: true, reorderDefault: 10,
-  storeName: '', storeLine: '', footer: 'Thank you! Come again.', paper: 58, printer: '', printerName: '', autoPrint: false}, ls.get('ps_settings', {}));
+  storeName: '', storeLine: '', footer: 'Thank you! Come again.', paper: 58, printer: '', printerName: '', autoPrint: false,
+  services: [{id:'svc-print-bw', name:'Print (B&W)', price:5, unit:'page'}, {id:'svc-print-color', name:'Print (Color)', price:10, unit:'page'}, {id:'svc-xerox', name:'Photocopy', price:3, unit:'page'}],
+  gcFeePer: 10, gcFeeBlock: 500, gcFeeMin: 10}, ls.get('ps_settings', {}));
+let gcashLog = ls.get('ps_gcash', []);
 const saveSettings = () => ls.set('ps_settings', settings);
 let stockFilter = 'all';
 let queue = ls.get('ps_queue', []);
@@ -296,16 +309,17 @@ async function flushQueue(){
   if (flushing || !writeUrl || !queue.length) { renderQueue(); return; }
   flushing = true;
   try{
-    while (queue.length){
-      const q = queue[0];
+    let i = 0, needsUpdate = false;
+    while (i < queue.length){
+      const q = queue[i];
       let res;
       try{ res = await postJson(writeUrl, q); }
       catch(e){ toast('Sheet not updated yet (' + (e.message||'offline') + '). Will retry.'); break; }
       if (!res.ok){
-        if (/unknown action/i.test(res.error||'')){ toast('Update the script in your sheet to use stock & sales (⟳ Sheet → Setup steps).'); break; }
-        toast('Sheet error: ' + (res.error||'unknown')); queue.shift(); ls.set('ps_queue', queue); continue;
+        if (/unknown action/i.test(res.error||'')){ needsUpdate = true; i++; continue; } // keep it until the sheet script is updated
+        toast('Sheet error: ' + (res.error||'unknown')); queue.splice(i,1); ls.set('ps_queue', queue); continue;
       }
-      queue.shift(); ls.set('ps_queue', queue);
+      queue.splice(i,1); ls.set('ps_queue', queue);
       if (q.action === 'save'){
         const p = byId(q.id);
         if (p && res.tab && p.tab !== res.tab){ p.tab = res.tab; persist(); }
@@ -315,6 +329,7 @@ async function flushQueue(){
         if (p && typeof res.stock === 'number'){ p.stock = res.stock; persist(); renderStock(); }
       }
     }
+    if (needsUpdate) toast('Some changes wait for a sheet script update (⟳ Sheet → Setup steps → Updating the script).');
   } finally { flushing = false; renderQueue(); }
 }
 // ---------------- Inventory ----------------
@@ -388,7 +403,10 @@ function openStock(p){
 function renderQueue(){ const el = document.getElementById('queueInfo'); if (el) el.textContent = queue.length ? `${queue.length} change${queue.length===1?'':'s'} waiting to be written to the sheet.` : (writeUrl ? 'All changes are in the sheet.' : ''); }
 function deleteProduct(id){ products = products.filter(p => p.id!==id); persist(); renderAll(); }
 
-const byId = id => products.find(p => p.id===id);
+// Service lines (printing, photocopy…) use ids like "svc-xerox@3" = service id @ price per unit.
+const svcById = id => { const m = String(id).match(/^(svc-[^@]+)@([\d.]+)$/); if (!m) return null; const sv = (settings.services||[]).find(x => x.id===m[1]);
+  return {id, name: sv ? sv.name : m[1].replace(/^svc-/,''), price: Number(m[2]), service: true, unit: sv ? sv.unit : 'pc', stock: null, brand:'', size:''}; };
+const byId = id => products.find(p => p.id===id) || svcById(id);
 const codesOf = p => String(p.barcode||'').split(/[,;\s]+/).filter(Boolean);
 const byCode = code => { const n = normCode(code); return n ? products.find(p => codesOf(p).some(b => normCode(b)===n)) : null; };
 const sortP = list => list.slice().sort((a,b)=> (a.name||'').localeCompare(b.name||''));
@@ -598,11 +616,121 @@ function updateChange(){
 // ---------------- Sales ----------------
 const startOfToday = () => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); };
 function renderSales(){
-  const today = sales.filter(x => x.at >= startOfToday()).sort((a,b)=>b.at-a.at);
-  $('#todayTotal').textContent = peso(today.reduce((s,x)=>s+(x.total||0),0));
-  $('#todayCount').textContent = today.length + (today.length===1?' sale':' sales');
-  $('#todayList').innerHTML = today.slice(0,20).map(x => `<div class="line"><span>${new Date(x.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})} · ${x.count} item${x.count===1?'':'s'}</span><span>${peso(x.total)}</span></div>`).join('') || '<div class="hint">No completed sales yet today.</div>';
+  const t0 = startOfToday();
+  const today = sales.filter(x => x.at >= t0);
+  const gc = gcashLog.filter(x => x.at >= t0);
+  const sum = (a, f) => a.reduce((s,x) => s + (Number(f(x))||0), 0);
+  const goods = sum(today, x => x.items.filter(i => !i.service).reduce((s,i)=>s+i.price*i.qty,0));
+  const svc = sum(today, x => x.items.filter(i => i.service).reduce((s,i)=>s+i.price*i.qty,0));
+  const fees = sum(gc, x => x.fee);
+  const cin = gc.filter(x => x.type==='in'), cout = gc.filter(x => x.type==='out');
+  const drawer = sum(today, x => x.total) + sum(gc, x => x.cashDelta);
+  const wallet = sum(gc, x => x.walletDelta);
+  const sign = n => (n < 0 ? '−' : '+') + peso(Math.abs(n));
+  $('#todayTotal').textContent = peso(goods + svc + fees);
+  $('#todayCount').textContent = `${today.length} sale${today.length===1?'':'s'} · ${gc.length} GCash`;
+  $('#todaySummary').innerHTML = `
+    <div class="line"><span>Products</span><span>${peso(goods)}</span></div>
+    <div class="line"><span>Printing / photocopy</span><span>${peso(svc)}</span></div>
+    <div class="line"><span>GCash fees</span><span>${peso(fees)}</span></div>
+    <div class="line"><span>GCash cash-in (${cin.length})</span><span>${peso(sum(cin, x => x.amount))}</span></div>
+    <div class="line"><span>GCash cash-out (${cout.length})</span><span>${peso(sum(cout, x => x.amount))}</span></div>
+    <div class="line" style="font-weight:700"><span>Cash drawer change</span><span>${sign(drawer)}</span></div>
+    <div class="line" style="font-weight:700"><span>GCash wallet change</span><span>${sign(wallet)}</span></div>`;
+  const rows = today.map(x => ({at:x.at, label:`${x.count} item${x.count===1?'':'s'}`, amt:peso(x.total)}))
+    .concat(gc.map(x => ({at:x.at, label:`GCash ${x.type==='in'?'cash-in':'cash-out'} ${peso(x.amount)}${x.ref ? ' · ' + esc(x.ref) : ''}`, amt:'fee ' + peso(x.fee)})))
+    .sort((a,b) => b.at - a.at).slice(0, 25);
+  $('#todayList').innerHTML = rows.map(x => `<div class="line"><span>${new Date(x.at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})} · ${x.label}</span><span>${x.amt}</span></div>`).join('') || '<div class="hint">Nothing yet today.</div>';
 }
+
+// ---------------- Quick items: services & GCash ----------------
+function renderQuick(){
+  $('#quickRow').innerHTML = `<button class="gc" data-gc="in">GCash cash-in</button><button class="gc" data-gc="out">GCash cash-out</button>` +
+    (settings.services||[]).map(sv => `<button data-svc="${esc(sv.id)}">${esc(sv.name)} · ${peso(sv.price)}</button>`).join('');
+}
+function openService(sv){
+  openSheet(`<h2>${esc(sv.name)}</h2>
+    <div class="grid2">
+      <div class="field"><p class="label">${esc(sv.unit || 'page')}s</p><div class="row"><button class="btn plain" id="svMinus" type="button">−</button><input class="input big-in" id="svQty" inputmode="numeric" value="1" style="text-align:center"><button class="btn plain" id="svPlus" type="button">+</button></div></div>
+      <div class="field"><p class="label">Price per ${esc(sv.unit || 'page')} ₱</p><input class="input big-in" id="svPrice" inputmode="decimal" value="${esc(sv.price)}"></div>
+    </div>
+    <div class="total"><span class="label" style="margin:0">Amount</span><span class="big" id="svTotal" style="font-size:30px"></span></div>
+    <div class="actions"><button class="btn" id="svAdd">Add to sale</button><button class="btn plain" id="svCancel">Cancel</button></div>`);
+  const qty = () => Math.max(0, parseInt($('#svQty').value,10) || 0), price = () => parseFloat(String($('#svPrice').value).replace(/[^\d.]/g,'')) || 0;
+  const upd = () => { $('#svTotal').textContent = peso(qty()*price()); };
+  upd();
+  $('#svQty').addEventListener('input', upd); $('#svPrice').addEventListener('input', upd);
+  $('#svMinus').addEventListener('click', () => { $('#svQty').value = Math.max(1, qty()-1); upd(); });
+  $('#svPlus').addEventListener('click', () => { $('#svQty').value = qty()+1; upd(); });
+  $('#svQty').select();
+  $('#svAdd').addEventListener('click', () => {
+    if (!qty() || !price()){ toast('Enter pages and price'); return; }
+    addToCart(sv.id + '@' + price(), qty()); closeSheet(); toast(`Added ${qty()} × ${sv.name}`); if (scanMode !== 'cart') setMode('cart');
+  });
+  $('#svCancel').addEventListener('click', closeSheet);
+}
+const gcFee = amt => { if (!amt) return 0; const per = Number(settings.gcFeePer)||0, block = Number(settings.gcFeeBlock)||0, min = Number(settings.gcFeeMin)||0;
+  return Math.max(min, block ? Math.ceil(amt / block) * per : per); };
+function openGcash(type){
+  let feeTouched = false;
+  openSheet(`<h2>GCash</h2>
+    <div class="seg"><button id="gcIn" class="${type==='in'?'on':''}">Cash-in</button><button id="gcOut" class="${type==='out'?'on':''}">Cash-out</button></div>
+    <div class="grid2">
+      <div class="field"><p class="label">Amount ₱</p><input class="input big-in" id="gcAmt" inputmode="decimal" placeholder="0"></div>
+      <div class="field"><p class="label">Fee ₱</p><input class="input big-in" id="gcFee" inputmode="decimal" placeholder="0"></div>
+    </div>
+    <div class="field"><p class="label">Fee is</p><select class="input" id="gcFeeHow"></select></div>
+    <div class="instr" id="gcInstr"></div>
+    <div class="grid2">
+      <div class="field"><p class="label">GCash ref no.</p><input class="input" id="gcRef" inputmode="numeric" placeholder="From the SMS / receipt"></div>
+      <div class="field"><p class="label">Customer number</p><input class="input" id="gcNum" inputmode="tel" placeholder="09xx (optional)"></div>
+    </div>
+    <div class="actions"><button class="btn" id="gcSave">Record</button><button class="btn plain" id="gcCancel">Cancel</button></div>`);
+  const howOpts = () => type === 'in'
+    ? [['cash','Paid in cash on top'],['deduct','Deducted from the amount sent']]
+    : [['deduct','Deducted from the cash given'],['gcash','Sent by customer via GCash on top']];
+  const fillHow = () => { $('#gcFeeHow').innerHTML = howOpts().map(([v,l]) => `<option value="${v}">${l}</option>`).join(''); };
+  const num = id => parseFloat(String($(id).value).replace(/[^\d.]/g,'')) || 0;
+  const calc = () => {
+    const amt = num('#gcAmt'), fee = num('#gcFee'), how = $('#gcFeeHow').value;
+    let cashDelta, walletDelta, say;
+    if (type === 'in'){
+      if (how === 'cash'){ cashDelta = amt + fee; walletDelta = -amt; say = `Collect <b>${peso(amt+fee)}</b> cash.<br>Send <b>${peso(amt)}</b> to the customer’s GCash.`; }
+      else { cashDelta = amt; walletDelta = -(amt - fee); say = `Collect <b>${peso(amt)}</b> cash.<br>Send <b>${peso(Math.max(0,amt-fee))}</b> to the customer’s GCash.`; }
+    } else {
+      if (how === 'gcash'){ cashDelta = -amt; walletDelta = amt + fee; say = `Customer sends <b>${peso(amt+fee)}</b> to your GCash.<br>Give <b>${peso(amt)}</b> cash.`; }
+      else { cashDelta = -(amt - fee); walletDelta = amt; say = `Customer sends <b>${peso(amt)}</b> to your GCash.<br>Give <b>${peso(Math.max(0,amt-fee))}</b> cash.`; }
+    }
+    $('#gcInstr').innerHTML = amt ? say + `<div class="hint" style="margin-top:6px">Your income: ${peso(fee)} fee</div>` : 'Enter the amount.';
+    return {amt, fee, how, cashDelta, walletDelta};
+  };
+  const setType = t => { type = t; $('#gcIn').classList.toggle('on', t==='in'); $('#gcOut').classList.toggle('on', t==='out'); fillHow(); calc(); };
+  fillHow(); calc();
+  $('#gcIn').addEventListener('click', () => setType('in'));
+  $('#gcOut').addEventListener('click', () => setType('out'));
+  $('#gcAmt').addEventListener('input', () => { if (!feeTouched){ const a = num('#gcAmt'); $('#gcFee').value = a ? gcFee(a) : ''; } calc(); });
+  $('#gcFee').addEventListener('input', () => { feeTouched = true; calc(); });
+  $('#gcFeeHow').addEventListener('change', calc);
+  $('#gcAmt').focus();
+  $('#gcCancel').addEventListener('click', closeSheet);
+  $('#gcSave').addEventListener('click', () => {
+    const c = calc();
+    if (!c.amt){ toast('Enter the amount'); return; }
+    const tx = {id: 'G' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2,5).toUpperCase(), at: Date.now(), type,
+      amount: c.amt, fee: c.fee, feeHow: c.how, cashDelta: Math.round(c.cashDelta*100)/100, walletDelta: Math.round(c.walletDelta*100)/100,
+      ref: $('#gcRef').value.trim(), number: $('#gcNum').value.trim(), device: settings.device};
+    gcashLog.push(tx); gcashLog = gcashLog.filter(x => x.at > Date.now() - 60*86400000); ls.set('ps_gcash', gcashLog);
+    if (writeUrl){ queue.push({id:'gc-' + tx.id, action:'gcash', tx}); ls.set('ps_queue', queue); flushQueue(); }
+    renderSales(); closeSheet();
+    toast(`GCash ${type==='in'?'cash-in':'cash-out'} recorded · fee ${peso(tx.fee)}`, hasPrinter() ? 'Print' : '', hasPrinter() ? () => printText(gcashReceipt(tx)) : null);
+  });
+}
+$('#quickRow').addEventListener('click', e => {
+  const g = e.target.closest('[data-gc]'), sv = e.target.closest('[data-svc]');
+  if (g) openGcash(g.dataset.gc);
+  if (sv){ const x = (settings.services||[]).find(y => y.id === sv.dataset.svc); if (x) openService(x); }
+});
+
 function completeSale(){
   const lines = cart.filter(l => byId(l.id));
   if (!lines.length){ toast('No items in this sale'); return; }
@@ -611,7 +739,7 @@ function completeSale(){
   if (cash && cash < total){ toast('Cash is less than the total'); return; }
   const sale = { id: 'S' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2,5).toUpperCase(), at: Date.now(), device: settings.device,
     total: Math.round(total*100)/100, count: lines.reduce((s,l)=>s+l.qty,0), cash: cash||null, change: cash ? Math.round((cash-total)*100)/100 : null,
-    items: lines.map(l => { const p = byId(l.id); return {name:p.name, brand:p.brand||'', size:p.size||'', tab:p.tab||'', price:Number(p.price)||0, qty:l.qty}; }) };
+    items: lines.map(l => { const p = byId(l.id); return {name:p.name, brand:p.brand||'', size:p.service ? 'service' : (p.size||''), tab:p.tab||'', price:Number(p.price)||0, qty:l.qty, service: !!p.service}; }) };
   // Stock goes down right away on this device; the sheet is updated in the background.
   lines.forEach(l => { const p = byId(l.id); if (p && hasStock(p)) p.stock = Number(p.stock) - l.qty; });
   persist();
@@ -999,6 +1127,7 @@ window.__onBack = () => { if ($('#sheetBg').classList.contains('open')){ closeSh
 
 if (NATIVE_CAM){ $('#cam').classList.add('native'); $('#camSub').textContent = 'Point the camera at a barcode — it scans automatically. Tap the picture to focus.'; }
 setMode(scanMode);
+renderQuick();
 renderAll(); renderSales();
 flushQueue().then(() => syncSheet(true)).then(() => flushQueue());
 // ----- Settings: device, scanner, receipt printer -----
@@ -1024,12 +1153,32 @@ function receiptText(sale){
   if (settings.footer){ L.push(''); wrap(settings.footer).forEach(x => L.push('[C]' + x)); }
   return L.join('\n');
 }
-function printReceipt(sale){
+function printReceipt(sale){ printText(receiptText(sale)); }
+function printText(text){
   if (!hasPrinter()){ toast('No printer set up — ⚙ Settings → Receipt printer'); return; }
   toast('Printing…');
   const id = 'c' + (++cbN);
   cbs[id] = (ok, msg) => toast(ok ? 'Receipt printed ✓' : 'Print failed: ' + msg + ' — is the printer on and paired?');
-  Native.printReceipt(settings.printer, receiptText(sale), id);
+  Native.printReceipt(settings.printer, text, id);
+}
+function gcashReceipt(tx){
+  const W = Number(settings.paper) === 80 ? 48 : 32;
+  const money = n => 'P' + (Number(n)||0).toFixed(2);
+  const lr = (l, r) => l + ' '.repeat(Math.max(1, W - l.length - r.length)) + r;
+  const L = [];
+  if (settings.storeName) L.push('[C][B]' + settings.storeName.replace(/[^\x20-\x7E]/g,''));
+  L.push('[C][B]GCASH ' + (tx.type==='in' ? 'CASH-IN' : 'CASH-OUT'));
+  const d = new Date(tx.at); L.push('[C]' + d.toLocaleDateString('en-PH') + ' ' + d.toLocaleTimeString('en-PH', {hour:'2-digit', minute:'2-digit'}));
+  L.push('-'.repeat(W));
+  L.push(lr('Amount', money(tx.amount)));
+  L.push(lr('Service fee', money(tx.fee)));
+  if (tx.ref) L.push(lr('Ref no.', tx.ref.slice(0, W-8)));
+  if (tx.number) L.push(lr('Mobile', tx.number.slice(0, W-8)));
+  L.push('-'.repeat(W));
+  if (tx.type==='in') L.push('[B]' + lr('Cash received', money(tx.cashDelta)));
+  else L.push('[B]' + lr('Cash given', money(-tx.cashDelta)));
+  if (settings.footer){ L.push(''); L.push('[C]' + settings.footer.replace(/[^\x20-\x7E]/g,'').slice(0, W)); }
+  return L.join('\n');
 }
 function openSettings(){
   const btOk = !!(Native && Native.listPrinters);
@@ -1038,6 +1187,16 @@ function openSettings(){
     <p class="hint" style="margin-top:-6px">Shown in the sheet’s Sales and Stock Log tabs, so you know which device made each sale.</p>
     <label class="switch"><span><b>Start camera automatically</b><br><span class="hint">Turn off when you use a USB/Bluetooth barcode scanner.</span></span><input type="checkbox" id="stCam" ${settings.autoCam?'checked':''}></label>
     <div class="field" style="margin-top:12px"><p class="label">Default “low stock” level (pieces)</p><input class="input" id="stReorder" inputmode="numeric" value="${esc(settings.reorderDefault)}"></div>
+    <h2 style="font-size:16px;margin-top:18px">Printing / photocopy prices</h2>
+    <div id="stSvcList"></div>
+    <button class="btn ghost" id="stSvcAdd" type="button" style="margin-top:6px">+ Add service</button>
+    <h2 style="font-size:16px;margin-top:18px">GCash fee</h2>
+    <div class="grid2">
+      <div class="field"><p class="label">Fee ₱</p><input class="input" id="stGcPer" inputmode="decimal" value="${esc(settings.gcFeePer)}"></div>
+      <div class="field"><p class="label">for every ₱ (or part)</p><input class="input" id="stGcBlock" inputmode="decimal" value="${esc(settings.gcFeeBlock)}"></div>
+    </div>
+    <div class="field"><p class="label">Minimum fee ₱</p><input class="input" id="stGcMin" inputmode="decimal" value="${esc(settings.gcFeeMin)}"></div>
+    <p class="hint" style="margin-top:-6px">Example: ₱10 for every ₱500 → ₱1,200 cash-in = ₱30 fee. You can still change the fee on each transaction.</p>
     <h2 style="font-size:16px;margin-top:18px">Barcode scanner (USB / Bluetooth)</h2>
     <p class="hint" style="margin-top:0">Plug in or pair the scanner — no setup needed. Scan anywhere in the app (not while typing in a box). Test it here:</p>
     <input class="input" id="stScanTest" placeholder="Tap here and scan a barcode">
@@ -1057,6 +1216,12 @@ function openSettings(){
     settings.device = $('#stDevice').value.trim() || settings.device;
     settings.autoCam = $('#stCam').checked;
     settings.reorderDefault = parseInt($('#stReorder').value,10) || 0;
+    const nm = v => parseFloat(String(v).replace(/[^\d.]/g,''));
+    settings.gcFeePer = nm($('#stGcPer').value) || 0; settings.gcFeeBlock = nm($('#stGcBlock').value) || 0; settings.gcFeeMin = nm($('#stGcMin').value) || 0;
+    settings.services = [...document.querySelectorAll('#stSvcList .svcrow')].map(row => ({
+      id: row.dataset.id, name: row.querySelector('.svN').value.trim(), price: nm(row.querySelector('.svP').value) || 0, unit: row.querySelector('.svU').value.trim() || 'page'
+    })).filter(x => x.name);
+    renderQuick();
     if (btOk){
       const sel = $('#stPrinter');
       if (sel.value){ settings.printer = sel.value; settings.printerName = sel.options[sel.selectedIndex].text; }
@@ -1065,6 +1230,10 @@ function openSettings(){
     }
     saveSettings();
   };
+  const svcRow = sv => `<div class="svcrow row" data-id="${esc(sv.id)}" style="margin-bottom:6px"><input class="input svN" value="${esc(sv.name)}" placeholder="Name"><input class="input svP" inputmode="decimal" value="${esc(sv.price)}" style="max-width:80px" placeholder="₱"><input class="input svU" value="${esc(sv.unit||'page')}" style="max-width:80px" placeholder="unit"><button class="btn danger svDel" type="button" style="padding:10px 12px">✕</button></div>`;
+  $('#stSvcList').innerHTML = (settings.services||[]).map(svcRow).join('');
+  $('#stSvcList').addEventListener('click', e => { const d = e.target.closest('.svDel'); if (d) d.closest('.svcrow').remove(); });
+  $('#stSvcAdd').addEventListener('click', () => { $('#stSvcList').insertAdjacentHTML('beforeend', svcRow({id:'svc-' + Date.now().toString(36), name:'', price:'', unit:'page'})); $('#stSvcList .svcrow:last-child .svN').focus(); });
   $('#stScanTest').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); toast('Scanner works ✓ — read ' + e.target.value); e.target.value=''; } });
   if (btOk){
     $('#stFind').addEventListener('click', () => {

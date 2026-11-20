@@ -9,11 +9,12 @@
  *  3. Copy the Web app URL (ends with /exec) and paste it into the app: ⟳ Sheet → "Sheet write link".
  */
 
-const SCRIPT_VERSION = 2;
+const SCRIPT_VERSION = 3;
+const GCASH_TAB = 'GCash';
 const SALES_TAB = 'Sales';
 const STOCK_LOG_TAB = 'Stock Log';
 // Tabs whose names contain any of these words are never treated as product tabs.
-const SKIP_TAB_WORDS = ['search', 'lookup', 'dashboard', 'sales', 'stock log'];
+const SKIP_TAB_WORDS = ['search', 'lookup', 'dashboard', 'sales', 'stock log', 'gcash'];
 
 function doGet() {
   return out_({ ok: true, version: SCRIPT_VERSION, msg: 'Price Scanner sheet link is working', tabs: dataSheets_().map(s => s.getName()) });
@@ -28,6 +29,7 @@ function doPost(e) {
     if (req.action === 'save') return out_(saveProduct_(req));
     if (req.action === 'sale') return out_(recordSale_(req));
     if (req.action === 'stock') return out_(adjustStock_(req));
+    if (req.action === 'gcash') return out_(recordGcash_(req));
     return out_({ ok: false, error: 'Unknown action' });
   } catch (err) {
     return out_({ ok: false, error: String(err) });
@@ -252,4 +254,26 @@ function recordSale_(req) {
     stock[it.key || it.name] = after;
   }
   return { ok: true, stock: stock };
+}
+
+// ---------------- GCash cash-in / cash-out ----------------
+function recordGcash_(req) {
+  const tx = req.tx || {};
+  if (!tx.id || !tx.amount) return { ok: false, error: 'Empty GCash transaction' };
+  const sh = logSheet_(GCASH_TAB, ['Date', 'Time', 'Txn ID', 'Type', 'Amount', 'Fee', 'Fee Paid', 'Cash Drawer', 'GCash Wallet', 'Ref No.', 'Customer No.', 'Device']);
+  const last = sh.getLastRow();
+  if (last > 1) {
+    const from = Math.max(2, last - 1500);
+    if (sh.getRange(from, 3, last - from + 1, 1).getDisplayValues().some(r => r[0] === tx.id)) return { ok: true, duplicate: true };
+  }
+  const when = new Date(tx.at || Date.now());
+  const tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
+  const how = { cash: 'Cash, on top', deduct: 'Deducted', gcash: 'Via GCash, on top' }[tx.feeHow] || tx.feeHow || '';
+  sh.getRange(last + 1, 1, 1, 12).setValues([[
+    Utilities.formatDate(when, tz, 'yyyy-MM-dd'), Utilities.formatDate(when, tz, 'HH:mm:ss'), tx.id,
+    tx.type === 'in' ? 'Cash-in' : 'Cash-out', Number(tx.amount) || 0, Number(tx.fee) || 0, how,
+    Number(tx.cashDelta) || 0, Number(tx.walletDelta) || 0, String(tx.ref || ''), String(tx.number || ''), tx.device || ''
+  ]]);
+  sh.getRange(last + 1, 10, 1, 2).setNumberFormat('@');
+  return { ok: true };
 }
