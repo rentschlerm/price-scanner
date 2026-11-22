@@ -994,8 +994,8 @@ function openSheetSettings(){
     if (!/^https:\/\/script\.google\.com\/.*\/exec/.test(writeUrl)){ toast('That doesn’t look like a web app link (it should end with /exec)'); return; }
     toast('Testing link…');
     try{ const r = await postJson(writeUrl, {action:'ping'}); if (r.ok){ if (r.tabs) { sheetTabs = r.tabs; ls.set('ps_tabs', sheetTabs); }
-      if ((r.version||1) < 2) toast('Connected, but the sheet script is old — update it (Setup steps → “Updating the script”) to record sales & stock.');
-      else toast('Connected ✓ — tabs: ' + (r.tabs||[]).join(', ')); flushQueue(); } else toast('Link answered with an error: ' + r.error); }
+      if (!r.loader) toast('Connected. Do the one-time script update (Setup steps → “Updating the script”) — after that, sheet updates are automatic.');
+      else toast('Connected ✓ (auto-updating script) — tabs: ' + (r.tabs||[]).join(', ')); flushQueue(); } else toast('Link answered with an error: ' + r.error); }
     catch(e){ toast('Couldn’t reach the link: ' + e.message); }
   });
   $('#setupHelp').addEventListener('click', openSetupHelp);
@@ -1027,7 +1027,7 @@ function openSheetSettings(){
 }
 async function openSetupHelp(){
   let code = '';
-  try{ code = await fetchText('https://raw.githubusercontent.com/rentschlerm/price-scanner/main/apps-script/Code.gs?t=' + Date.now()); if (!/SCRIPT_VERSION/.test(code)) code = ''; }catch(e){ code = ''; }
+  try{ code = await fetchText('https://raw.githubusercontent.com/rentschlerm/price-scanner/main/apps-script/Code.gs?t=' + Date.now()); if (!/LOGIC_URL|SCRIPT_VERSION/.test(code)) code = ''; }catch(e){ code = ''; }
   if (!code){ try{ code = await fetch('Code.gs').then(r => r.text()); }catch(e){} }
   openSheet(`<h2>Connect the app to your sheet (once)</h2>
     <p class="hint" style="margin-top:0">Easiest on a computer. Takes about 3 minutes.</p>
@@ -1035,10 +1035,10 @@ async function openSetupHelp(){
       <li>Tap <b>Copy script</b> below (or open github.com/rentschlerm/price-scanner → apps-script/Code.gs).</li>
       <li>Open your Google Sheet → <b>Extensions → Apps Script</b>. Delete what’s there, paste, and press <b>Save</b>.</li>
       <li>Click <b>Deploy → New deployment</b>. Click the gear ⚙ → <b>Web app</b>.</li>
-      <li>Set <b>Execute as: Me</b> and <b>Who has access: Anyone</b>. Click <b>Deploy</b>, then <b>Authorize access</b> and allow it (choose your account → Advanced → Go to project).</li>
+      <li>Set <b>Execute as: Me</b> and <b>Who has access: Anyone</b>. Click <b>Deploy</b>, then <b>Authorize access</b> and allow it (choose your account → Advanced → Go to project). It asks to connect to an external service: that is how it downloads its own updates from your GitHub repo.</li>
       <li>Copy the <b>Web app URL</b> (ends with <b>/exec</b>), paste it into <b>Sheet write link</b> here, and tap <b>Save &amp; test link</b>.</li>
     </ol>
-    <p class="hint"><b>Updating the script</b> (when the app asks): paste the new script the same way and Save, then <b>Deploy → Manage deployments → ✏ Edit → Version: New version → Deploy</b>. The link stays the same.</p>
+    <p class="hint"><b>Updating the script</b> (one last time — the new script updates itself from now on): paste it the same way and Save, then <b>Deploy → Manage deployments → ✏ Edit → Version: New version → Deploy</b>. Google asks you to authorize again because the script now downloads its updates — allow it. The link stays the same.</p>
     <p class="hint">The script only adds or updates product rows, records sales in a <b>Sales</b> tab and stock changes in a <b>Stock Log</b> tab (and adds a “Barcode” column where a tab has none). It never touches formulas or a tab with “search” in its name.</p>
     <div class="actions"><button class="btn" id="copyScript" ${code?'':'disabled'}>Copy script</button><button class="btn plain" id="helpClose">Back</button></div>`);
   $('#copyScript').addEventListener('click', e => copyText(code).then(() => { e.currentTarget.textContent = 'Copied ✓'; }, () => toast('Copy failed')));
