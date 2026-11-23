@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Price Scanner</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Price Scanner">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f766e">
 <meta name="min-native" content="6">
 <script src="zxing.min.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -16,7 +23,7 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Roboto,sans-serif;font-size:16px}
 button,input,select,textarea{font:inherit;color:inherit}
-header{position:sticky;top:0;z-index:5;background:var(--brand);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between}
+header{position:sticky;top:0;z-index:5;background:var(--brand);color:#fff;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 12px;display:flex;align-items:center;justify-content:space-between}
 header h1{font-size:18px;margin:0;font-weight:700}
 header button{background:rgba(255,255,255,.15);border:0;color:#fff;border-radius:10px;padding:7px 12px;font-size:13px;font-weight:600}
 main{padding:14px 14px 170px;max-width:560px;margin:0 auto}
@@ -76,7 +83,7 @@ main{padding:14px 14px 170px;max-width:560px;margin:0 auto}
 .cashgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}
 .cashgrid button{border:1px solid var(--line);background:#fff;border-radius:10px;padding:11px 0;font-weight:700}
 .empty{text-align:center;color:var(--muted);padding:24px 8px;font-size:15px}
-nav{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);display:flex;padding:6px;z-index:6}
+nav{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);display:flex;padding:6px 6px calc(6px + env(safe-area-inset-bottom,0px));z-index:6}
 nav button{flex:1;border:0;background:transparent;padding:8px 4px;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:12px;font-weight:600;color:var(--muted);position:relative}
 nav button svg{width:24px;height:24px}
 nav button.on{color:var(--brand)}
@@ -540,7 +547,22 @@ async function loop(){
   loopTimer = setTimeout(loop, detector ? 120 : 60);
 }
 
+const WEB_URL = 'https://rentschlerm.github.io/price-scanner/';
+function setupLink(){ return WEB_URL + '#setup=' + encodeURIComponent(btoa(JSON.stringify({w: writeUrl, s: sheetUrl}))); }
+function applySetup(text){
+  const m = String(text||'').match(/#setup=([^&\s]+)/); if (!m) return false;
+  try{
+    const d = JSON.parse(atob(decodeURIComponent(m[1])));
+    if (!d.w) return false;
+    writeUrl = d.w; ls.set('ps_writeurl', writeUrl);
+    if (d.s){ sheetUrl = d.s; ls.set('ps_sheet', sheetUrl); }
+    toast('This device is connected to your sheet ✓'); renderQueue();
+    flushQueue().then(() => syncSheet(false));
+    return true;
+  }catch(e){ toast('That setup code could not be read'); return true; }
+}
 function handleCode(code){
+  if (/#setup=/.test(code)){ beep(true); applySetup(code); return; }
   if (editTarget){
     const t = editTarget;
     t.value = t.value.trim() ? t.value.trim() + ', ' + code : code;
@@ -951,7 +973,28 @@ function mergeRows(rows){
   persist(); renderAll();
   return {added, updated};
 }
+async function readViaScript(){
+  const res = await postJson(writeUrl, {action:'products'});
+  if (!res.ok) throw new Error(/unknown action/i.test(res.error||'') ? 'update the script in your sheet to version 4 (⟳ Sheet → Setup steps)' : (res.error||'sheet error'));
+  const isSearch = n => /search|lookup|dashboard|^sales$|stock log|gcash/i.test(n);
+  const found = [];
+  for (const t of res.tabs || []){ const pr = parseTable(t.tsv); if (pr.rows.length){ pr.rows.forEach(x => x.tab = t.name); found.push({name:t.name, rows:pr.rows}); } }
+  const use = found.some(f => !isSearch(f.name)) ? found.filter(f => !isSearch(f.name)) : found;
+  sheetTabs = use.map(f => f.name); ls.set('ps_tabs', sheetTabs);
+  return {rows: [].concat(...use.map(f => f.rows)), tabs: use.map(f => `${f.name} (${f.rows.length})`), tabCount: (res.tabs||[]).length};
+}
 async function syncSheet(silent){
+  if (!Native){
+    if (!writeUrl){ if (!silent) toast('Set up this device first: scan the setup QR from the Android app, or paste the setup link in ⟳ Sheet'); return; }
+    if (!silent) toast('Loading prices from your sheet…');
+    try{
+      const r = await readViaScript(); lastTabs = r.tabs;
+      const res = mergeRows(r.rows);
+      lastSync = Date.now(); ls.set('ps_lastsync', lastSync);
+      if (!silent || res.added) toast(`Sheet loaded from ${r.tabs.length} tabs: ${res.added} new, ${res.updated} updated`);
+      return res;
+    }catch(e){ if (!silent) toast('Couldn’t load sheet: ' + (e.message||'no internet')); return; }
+  }
   const url = sheetCsvUrl(sheetUrl);
   if (!url){ if (!silent) toast('Set your Google Sheet link first'); return; }
   if (!silent) toast('Loading prices from your sheet…');
@@ -979,7 +1022,7 @@ function openSheetSettings(){
     <div class="actions"><button class="btn" id="syncNow">Load prices now</button><button class="btn plain" id="sheetClose">Close</button></div>
     <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
     <h2 style="font-size:16px">Write to the sheet</h2>
-    <p class="hint" style="margin-top:0">With this set, learned barcodes and new or edited products are written straight into the right tab of your sheet. ${writeUrl ? '' : '<b>One-time setup needed.</b>'}</p>
+    <p class="hint" style="margin-top:0">With this set, learned barcodes and new or edited products are written straight into the right tab of your sheet. ${writeUrl ? '' : '<b>One-time setup needed.</b>'}${!Native ? ' <b>iPhone / web:</b> paste the setup link from the Android app here (⚙ Settings → Set up another device).' : ''}</p>
     <div class="field"><p class="label">Sheet write link</p><input class="input" id="writeUrlIn" value="${esc(writeUrl)}" placeholder="https://script.google.com/macros/s/…/exec"></div>
     <p class="hint" id="queueInfo"></p>
     <div class="actions"><button class="btn" id="writeSave">Save &amp; test link</button><button class="btn ghost" id="setupHelp">Setup steps</button></div>
@@ -989,6 +1032,7 @@ function openSheetSettings(){
     <div class="actions"><button class="btn ghost" id="pasteImport">Paste rows instead</button><button class="btn ghost" id="sheetExport">Copy to spreadsheet</button></div>`);
   renderQueue();
   $('#writeSave').addEventListener('click', async () => {
+    if (applySetup($('#writeUrlIn').value)){ closeSheet(); return; }
     writeUrl = $('#writeUrlIn').value.trim(); ls.set('ps_writeurl', writeUrl);
     if (!writeUrl){ toast('Write link removed'); renderQueue(); return; }
     if (!/^https:\/\/script\.google\.com\/.*\/exec/.test(writeUrl)){ toast('That doesn’t look like a web app link (it should end with /exec)'); return; }
@@ -1043,6 +1087,33 @@ async function openSetupHelp(){
     <div class="actions"><button class="btn" id="copyScript" ${code?'':'disabled'}>Copy script</button><button class="btn plain" id="helpClose">Back</button></div>`);
   $('#copyScript').addEventListener('click', e => copyText(code).then(() => { e.currentTarget.textContent = 'Copied ✓'; }, () => toast('Copy failed')));
   $('#helpClose').addEventListener('click', openSheetSettings);
+}
+function loadScript(src){ return new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = src; sc.onload = res; sc.onerror = rej; document.head.appendChild(sc); }); }
+async function openSetupOther(){
+  const link = setupLink();
+  openSheet(`<h2>Set up another device</h2>
+    <ol class="hint" style="padding-left:18px;margin-top:0">
+      <li><b>iPhone:</b> point the iPhone <b>Camera</b> at this code and tap the link. It opens the Price Scanner web app already connected.</li>
+      <li>In Safari tap <b>Share → Add to Home Screen</b>.</li>
+      <li>Open it from the Home Screen icon, tap <b>Start scanning</b>, and scan this code once more (the Home Screen app keeps its own data).</li>
+    </ol>
+    <div id="qrBox" style="display:flex;justify-content:center;padding:12px;background:#fff;border:1px solid var(--line);border-radius:14px;min-height:240px;align-items:center"><span class="hint">Making QR code…</span></div>
+    <p class="hint">Or send this link to the iPhone (Messenger, email) and open it there:</p>
+    <div class="actions" style="margin-top:0"><button class="btn" id="cpSetup">Copy setup link</button><button class="btn plain" id="soClose">Close</button></div>
+    <p class="hint">Keep this code private — it lets a device write to your sheet.</p>`);
+  $('#cpSetup').addEventListener('click', e => copyText(link).then(() => { e.currentTarget.textContent = 'Copied ✓'; }, () => toast('Copy failed')));
+  $('#soClose').addEventListener('click', closeSheet);
+  try{
+    // The scanner library (ZXing) built into the app can also draw QR codes — no internet needed.
+    const svg = new window.ZXing.BrowserQRCodeSvgWriter().write(link, 260, 260);
+    $('#qrBox').innerHTML = ''; $('#qrBox').appendChild(svg);
+  }catch(e1){
+    try{
+      if (!window.qrcode) await loadScript('https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js');
+      const q = qrcode(0, 'M'); q.addData(link); q.make();
+      $('#qrBox').innerHTML = q.createSvgTag({cellSize: 4, margin: 2, scalable: true}).replace('<svg ', '<svg style="width:240px;height:240px" ');
+    }catch(e){ $('#qrBox').innerHTML = '<span class="hint">Couldn’t make the QR code. Use Copy setup link instead.</span>'; }
+  }
 }
 function openImport(){
   openSheet(`<h2>Paste rows from your sheet</h2>
@@ -1149,6 +1220,8 @@ $('#exportBtn').addEventListener('click', exportRows);
 window.__onBack = () => { if ($('#sheetBg').classList.contains('open')){ closeSheet(); return true; } if (!$('#view-scan').classList.contains('active')){ go('scan'); return true; } return false; };
 
 if (NATIVE_CAM){ $('#cam').classList.add('native'); $('#camSub').textContent = 'Point the camera at a barcode — it scans automatically. Tap the picture to focus.'; }
+if (/#setup=/.test(location.hash)){ applySetup(location.hash); history.replaceState(null, '', location.pathname); }
+if (!Native && 'serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 setMode(scanMode);
 renderQuick();
 renderAll(); renderSales(); renderQueue();
@@ -1211,6 +1284,7 @@ function openSettings(){
     <label class="switch"><span><b>Start camera automatically</b><br><span class="hint">Turn off when you use a USB/Bluetooth barcode scanner.</span></span><input type="checkbox" id="stCam" ${settings.autoCam?'checked':''}></label>
     <div class="field" style="margin-top:12px"><p class="label">Default “low stock” level (pieces)</p><input class="input" id="stReorder" inputmode="numeric" value="${esc(settings.reorderDefault)}"></div>
     <p class="hint">App version: ${Native && Native.nativeVersion ? '1.0.' + Native.nativeVersion() : 'web'} · write link: ${writeUrl ? 'set ✓' : '<b>not set</b> (⟳ Sheet)'}</p>
+    ${writeUrl ? `<button class="btn ghost block" id="stOther" type="button" style="margin-top:4px">📱 Set up another device (iPhone, tablet)</button>` : ''}
     <h2 style="font-size:16px;margin-top:18px">Printing / photocopy prices</h2>
     <div id="stSvcList"></div>
     <button class="btn ghost" id="stSvcAdd" type="button" style="margin-top:6px">+ Add service</button>
@@ -1258,6 +1332,7 @@ function openSettings(){
   $('#stSvcList').innerHTML = (settings.services||[]).map(svcRow).join('');
   $('#stSvcList').addEventListener('click', e => { const d = e.target.closest('.svDel'); if (d) d.closest('.svcrow').remove(); });
   $('#stSvcAdd').addEventListener('click', () => { $('#stSvcList').insertAdjacentHTML('beforeend', svcRow({id:'svc-' + Date.now().toString(36), name:'', price:'', unit:'page'})); $('#stSvcList .svcrow:last-child .svN').focus(); });
+  $('#stOther')?.addEventListener('click', openSetupOther);
   $('#stScanTest').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); toast('Scanner works ✓ — read ' + e.target.value); e.target.value=''; } });
   if (btOk){
     $('#stFind').addEventListener('click', () => {

@@ -1,0 +1,44 @@
+name: Publish iPhone web version
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'app/src/main/assets/index.html'
+      - 'web/**'
+      - 'apps-script/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build site
+        run: |
+          mkdir -p site
+          cp app/src/main/assets/index.html site/index.html
+          cp web/* site/
+          cp apps-script/Code.gs site/Code.gs
+          curl -fsSL https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js -o site/zxing.min.js
+          curl -fsSL https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js -o site/xlsx.full.min.js
+          touch site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

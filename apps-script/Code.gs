@@ -9,7 +9,7 @@
  *  3. Copy the Web app URL (ends with /exec) and paste it into the app: ⟳ Sheet → "Sheet write link".
  */
 
-const SCRIPT_VERSION = 3;
+const SCRIPT_VERSION = 4;
 const GCASH_TAB = 'GCash';
 const SALES_TAB = 'Sales';
 const STOCK_LOG_TAB = 'Stock Log';
@@ -30,6 +30,7 @@ function doPost(e) {
     if (req.action === 'sale') return out_(recordSale_(req));
     if (req.action === 'stock') return out_(adjustStock_(req));
     if (req.action === 'gcash') return out_(recordGcash_(req));
+    if (req.action === 'products') return out_(readProducts_());
     return out_({ ok: false, error: 'Unknown action' });
   } catch (err) {
     return out_({ ok: false, error: String(err) });
@@ -276,4 +277,17 @@ function recordGcash_(req) {
   ]]);
   sh.getRange(last + 1, 10, 1, 2).setNumberFormat('@');
   return { ok: true };
+}
+
+// ---------------- Read all product tabs (used by the iPhone / web version) ----------------
+function readProducts_() {
+  const tabs = [];
+  for (const sh of dataSheets_()) {
+    const lastR = sh.getLastRow(), lastC = sh.getLastColumn();
+    if (lastR < 1 || lastC < 1) continue;
+    const vals = sh.getRange(1, 1, lastR, lastC).getDisplayValues();
+    const tsv = vals.map(r => r.map(v => String(v).replace(/[\t\r\n]+/g, ' ')).join('\t')).join('\n');
+    tabs.push({ name: sh.getName(), tsv: tsv });
+  }
+  return { ok: true, tabs: tabs };
 }
