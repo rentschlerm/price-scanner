@@ -59,15 +59,17 @@ function header_(sh, createBarcodeCol) {
   const vals = sh.getRange(1, 1, lastR, lastC).getDisplayValues();
   for (let r = 0; r < vals.length; r++) {
     const row = vals[r].map(norm_);
-    const pi = row.findIndex(h => h === 'product' || h === 'product name' || h === 'item' || h === 'item name');
-    if (pi < 0 || !row.some(h => h.includes('price'))) continue;
+    const NAMES = ['product', 'products', 'product name', 'product description', 'item', 'items', 'item name', 'item description', 'description', 'name', 'particulars'];
+    const isPrice = h => h.includes('price') || ['srp', 'retail', 'selling', 'amount', 'presyo'].includes(h) || h.startsWith('srp');
+    const pi = row.findIndex(h => NAMES.includes(h));
+    if (pi < 0 || !row.some(isPrice)) continue;
     const f = (...k) => row.findIndex(h => k.some(x => h.includes(x)));
     const cols = {
       category: f('category'), name: pi, brand: f('brand'), size: f('size', 'unit'), qty: f('qty', 'quantity'),
       cost: f('cost'), price: f('selling', 'srp', 'retail'), barcode: f('barcode', 'upc', 'ean'),
       stock: f('stock', 'on hand', 'inventory'), reorder: f('reorder', 'low stock', 'min')
     };
-    if (cols.price < 0) cols.price = row.findIndex((h, i) => h.includes('price') && i !== cols.cost);
+    if (cols.price < 0) cols.price = row.findIndex((h, i) => isPrice(h) && i !== cols.cost);
     if (createBarcodeCol) {
       let c = row.length; // first empty column after the header's last filled cell
       while (c > 0 && row[c - 1] === '') c--;

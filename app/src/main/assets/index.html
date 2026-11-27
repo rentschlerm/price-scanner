@@ -904,15 +904,16 @@ async function readAllTabs(){
   if (!url || !window.XLSX) return null;
   const b64 = await fetchBase64(url);
   const wb = XLSX.read(b64, {type:'base64'});
-  const found = [];
+  const found = [], parsed = [];
   for (const name of wb.SheetNames){
-    const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], {blankrows:false});
-    const r = parseTable(csv);
+    const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], {blankrows:true});
+    const r = parseTable(csv); parsed.push({name, r});
     if (r.rows.length){ r.rows.forEach(x => x.tab = name); found.push({name, rows:r.rows}); }
   }
   // A search/lookup tab only repeats rows from the real tabs — skip it when other tabs have products.
-  const isSearch = n => /search|lookup|dashboard|^sales$|stock log/i.test(n);
+  const isSearch = n => /search|lookup|dashboard|^sales$|stock log|gcash/i.test(n);
   const use = found.some(f => !isSearch(f.name)) ? found.filter(f => !isSearch(f.name)) : found;
+  buildReport(parsed, use.map(f => f.name));
   sheetTabs = use.map(f => f.name); ls.set('ps_tabs', sheetTabs);
   const rows = [].concat(...use.map(f => f.rows));
   return {rows, tabs: use.map(f => `${f.name} (${f.rows.length})`), tabCount: wb.SheetNames.length};
@@ -930,35 +931,60 @@ function fetchText(url){
     else fetch(url).then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP '+r.status))).then(res, rej);
   });
 }
-function parseTable(text){
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return {rows:[]};
-  const delim = lines[0].includes('\t') && !lines[0].includes(',') ? '\t' : (lines.some(l=>l.includes('\t')) ? '\t' : ',');
-  const split = l => {
-    if (delim==='\t') return l.split('\t');
-    const out = []; let cur = '', q = false;
-    for (let i=0;i<l.length;i++){ const ch = l[i];
-      if (q){ if (ch==='"' && l[i+1]==='"'){ cur+='"'; i++; } else if (ch==='"') q=false; else cur+=ch; }
-      else if (ch==='"') q=true; else if (ch===','){ out.push(cur); cur=''; } else cur+=ch; }
-    out.push(cur); return out;
-  };
-  const hi = lines.findIndex(l => { const c = split(l).map(x => x.trim().toLowerCase()); return c.some(x => x==='product' || x==='product name' || x==='item') && c.some(x => x.includes('price')); });
-  if (hi < 0) return {rows:[], error:'Couldn’t find the header row (needs a “Product” column and a “Selling Price” column).'};
-  const H = split(lines[hi]).map(h => h.trim().toLowerCase());
-  const col = (...keys) => H.findIndex(h => keys.some(k => h.includes(k)));
-  const ci = {category:col('category'), name:H.findIndex(h => h==='product'||h==='product name'||h==='item'), brand:col('brand'), size:col('size','unit'), qty:col('qty','quantity'), cost:col('cost'), price:col('selling','srp','retail'), barcode:col('barcode','upc','ean'), stock:col('stock','on hand','inventory'), reorder:col('reorder','low stock')};
-  if (ci.price < 0) ci.price = H.findIndex((h,i) => h.includes('price') && i!==ci.cost);
-  const num = v => { const n = parseFloat(String(v||'').replace(/[^\d.\-]/g,'')); return isNaN(n) ? null : n; };
-  const rows = [];
-  for (const l of lines.slice(hi+1)){
-    const c = split(l), g = i => i>=0 ? String(c[i]||'').trim() : '';
-    const name = g(ci.name), price = num(g(ci.price));
-    if (!name || price==null) continue;
-    rows.push({category:g(ci.category), name, brand:g(ci.brand), size:g(ci.size), qty:num(g(ci.qty)), cost:num(g(ci.cost)), price, barcode:g(ci.barcode).replace(/^'/,'').replace(/\.0+$/,''), stock: ci.stock>=0 ? num(g(ci.stock)) : null, reorder: ci.reorder>=0 ? num(g(ci.reorder)) : null});
+// Splits CSV/TSV text into rows of cells, keeping line breaks that are inside quoted cells.
+function parseCells(text){
+  text = String(text||'');
+  const firstLine = text.slice(0, text.indexOf('\n') >= 0 ? text.indexOf('\n') : text.length);
+  const delim = (firstLine.includes('\t') || (!firstLine.includes(',') && text.includes('\t'))) ? '\t' : ',';
+  const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < text.length; i++){
+    const ch = text[i];
+    if (q){
+      if (ch === '"' && text[i+1] === '"'){ cur += '"'; i++; }
+      else if (ch === '"') q = false;
+      else cur += ch;
+    } else if (ch === '"' && cur === '') q = true;
+    else if (ch === delim){ row.push(cur); cur = ''; }
+    else if (ch === '\n' || ch === '\r'){ if (ch === '\r' && text[i+1] === '\n') i++; row.push(cur); rows.push(row); row = []; cur = ''; }
+    else cur += ch;
   }
-  return {rows};
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+const NAME_HEADERS = ['product','products','product name','product description','item','items','item name','item description','description','name','particulars'];
+const isPriceHeader = h => h.includes('price') || ['srp','retail','selling','amount','presyo'].includes(h) || h.startsWith('srp');
+function headerMap(cells){
+  const H = cells.map(x => String(x||'').trim().toLowerCase().replace(/\s+/g,' '));
+  const name = H.findIndex(h => NAME_HEADERS.includes(h));
+  if (name < 0 || !H.some(isPriceHeader)) return null;
+  const col = (...keys) => H.findIndex(h => keys.some(k => h.includes(k)));
+  const ci = {category:col('category'), name, brand:col('brand'), size:col('size','unit','variant'), qty:col('qty','quantity','pcs per','pieces'), cost:col('cost','capital','puhunan'),
+    price:col('selling','srp','retail'), barcode:col('barcode','upc','ean'), stock:col('stock','on hand','inventory'), reorder:col('reorder','low stock')};
+  if (ci.price < 0) ci.price = H.findIndex((h,i) => isPriceHeader(h) && i !== ci.cost);
+  return ci;
+}
+// Returns {rows, skipped:[{row, name, reason}], error?}. A tab may contain several header rows (sections).
+function parseTable(text){
+  const all = parseCells(text);
+  const num = v => { const t = String(v||'').replace(/,/g,''); const n = parseFloat(t.replace(/[^\d.\-]/g,'')); return isNaN(n) ? null : n; };
+  let ci = null; const rows = [], skipped = [];
+  all.forEach((c, idx) => {
+    if (!c.some(x => String(x).trim())) return;
+    const h = headerMap(c); if (h){ ci = h; return; }
+    if (!ci) return; // title rows above the first header
+    const g = i => i>=0 ? String(c[i]||'').trim() : '';
+    const name = g(ci.name).replace(/\s*\n\s*/g,' ');
+    const filled = c.filter(x => String(x).trim()).length;
+    if (!name){ if (filled > 1 && num(g(ci.price)) != null) skipped.push({row: idx+1, name: '(no product name)', reason: 'product name is empty'}); return; }
+    const price = num(g(ci.price));
+    if (price == null){ if (filled > 1) skipped.push({row: idx+1, name, reason: g(ci.price) ? `price “${g(ci.price)}” is not a number` : 'selling price is empty'}); return; }
+    rows.push({category:g(ci.category), name, brand:g(ci.brand), size:g(ci.size), qty:num(g(ci.qty)), cost:num(g(ci.cost)), price, barcode:g(ci.barcode).replace(/^'/,'').replace(/\.0+$/,''), stock: ci.stock>=0 ? num(g(ci.stock)) : null, reorder: ci.reorder>=0 ? num(g(ci.reorder)) : null, row: idx+1});
+  });
+  if (!ci) return {rows:[], skipped:[], error:'no header row found (needs a “Product” column and a “Selling Price” column)'};
+  return {rows, skipped};
 }
 function mergeRows(rows){
+  rows = rows.map(({row: _sheetRow, ...x}) => x); // row numbers are only for the Sheet check
   let added = 0, updated = 0;
   const key = k => [k.name,k.brand,k.size].map(s=>String(s||'').trim().toLowerCase()).join('|');
   for (const row of rows){
@@ -973,13 +999,46 @@ function mergeRows(rows){
   persist(); renderAll();
   return {added, updated};
 }
+let sheetReport = ls.get('ps_report', null);
+function buildReport(parsed, used){
+  const seen = {}, tabs = [];
+  for (const {name, r} of parsed){
+    const t = {name, used: used.includes(name), count: r.rows.length, skipped: (r.skipped||[]).slice(), error: r.error || ''};
+    if (t.used){
+      for (const x of r.rows){
+        const k = [x.name, x.brand, x.size].map(v => String(v||'').trim().toLowerCase()).join('|');
+        if (seen[k]){ t.skipped.push({row: x.row, name: x.name, reason: `same name, brand and size as row ${seen[k].row} on “${seen[k].tab}” — shown once`}); }
+        else seen[k] = {row: x.row, tab: name};
+      }
+    } else if (!t.error) t.error = t.count ? 'skipped: looks like a search/sales/log tab' : 'no products found';
+    tabs.push(t);
+  }
+  sheetReport = {at: Date.now(), tabs}; ls.set('ps_report', sheetReport);
+}
+function openReport(){
+  if (!sheetReport){ toast('Load the sheet first (Load prices now)'); return; }
+  const tabsHtml = sheetReport.tabs.map(t => `
+    <div class="card" style="padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(t.name)}</b><span class="hint">${t.used ? t.count + ' product' + (t.count===1?'':'s') : ''}</span></div>
+      ${t.error ? `<div class="hint" style="color:${t.used?'var(--danger)':'var(--muted)'}">${t.used ? '' : 'Not read — '}${esc(t.error)}</div>` : ''}
+      ${t.skipped.length ? `<div class="hint" style="color:var(--warn);margin-top:6px"><b>${t.skipped.length} row${t.skipped.length===1?'':'s'} not added:</b></div>` +
+        t.skipped.slice(0, 30).map(x => `<div class="hint" style="padding-left:8px">Row ${x.row}: <b>${esc(x.name)}</b> — ${esc(x.reason)}</div>`).join('') +
+        (t.skipped.length > 30 ? `<div class="hint" style="padding-left:8px">…and ${t.skipped.length-30} more</div>` : '') : (t.used ? '<div class="hint" style="color:var(--brand)">All rows added ✓</div>' : '')}
+    </div>`).join('');
+  openSheet(`<h2>Sheet check</h2>
+    <p class="hint" style="margin-top:0">From the last load (${new Date(sheetReport.at).toLocaleString()}). Fix the rows below in the sheet, then tap <b>Load prices now</b>.</p>
+    ${tabsHtml}
+    <button class="btn plain block" id="rpClose">Close</button>`);
+  $('#rpClose').addEventListener('click', openSheetSettings);
+}
 async function readViaScript(){
   const res = await postJson(writeUrl, {action:'products'});
   if (!res.ok) throw new Error(/unknown action/i.test(res.error||'') ? 'update the script in your sheet to version 4 (⟳ Sheet → Setup steps)' : (res.error||'sheet error'));
   const isSearch = n => /search|lookup|dashboard|^sales$|stock log|gcash/i.test(n);
-  const found = [];
-  for (const t of res.tabs || []){ const pr = parseTable(t.tsv); if (pr.rows.length){ pr.rows.forEach(x => x.tab = t.name); found.push({name:t.name, rows:pr.rows}); } }
+  const found = [], parsed = [];
+  for (const t of res.tabs || []){ const pr = parseTable(t.tsv); parsed.push({name:t.name, r:pr}); if (pr.rows.length){ pr.rows.forEach(x => x.tab = t.name); found.push({name:t.name, rows:pr.rows}); } }
   const use = found.some(f => !isSearch(f.name)) ? found.filter(f => !isSearch(f.name)) : found;
+  buildReport(parsed, use.map(f => f.name));
   sheetTabs = use.map(f => f.name); ls.set('ps_tabs', sheetTabs);
   return {rows: [].concat(...use.map(f => f.rows)), tabs: use.map(f => `${f.name} (${f.rows.length})`), tabCount: (res.tabs||[]).length};
 }
@@ -991,7 +1050,8 @@ async function syncSheet(silent){
       const r = await readViaScript(); lastTabs = r.tabs;
       const res = mergeRows(r.rows);
       lastSync = Date.now(); ls.set('ps_lastsync', lastSync);
-      if (!silent || res.added) toast(`Sheet loaded from ${r.tabs.length} tabs: ${res.added} new, ${res.updated} updated`);
+      const skippedN = sheetReport ? sheetReport.tabs.filter(t => t.used).reduce((n,t) => n + t.skipped.length, 0) : 0;
+      if (!silent || res.added || skippedN) toast(`Sheet loaded from ${r.tabs.length} tabs: ${res.added} new, ${res.updated} updated` + (skippedN ? ` · ${skippedN} rows not added` : ''), skippedN ? 'Why?' : '', skippedN ? openReport : null);
       return res;
     }catch(e){ if (!silent) toast('Couldn’t load sheet: ' + (e.message||'no internet')); return; }
   }
@@ -1010,7 +1070,8 @@ async function syncSheet(silent){
     }
     const res = mergeRows(r.rows);
     lastSync = Date.now(); ls.set('ps_lastsync', lastSync);
-    if (!silent || res.added) toast(`Sheet loaded${note}: ${res.added} new, ${res.updated} updated`);
+    const skippedN = sheetReport ? sheetReport.tabs.filter(t => t.used).reduce((n,t) => n + t.skipped.length, 0) : 0;
+    if (!silent || res.added || skippedN) toast(`Sheet loaded${note}: ${res.added} new, ${res.updated} updated` + (skippedN ? ` · ${skippedN} rows not added` : ''), skippedN ? 'Why?' : '', skippedN ? openReport : null);
     return res;
   }catch(e){ if (!silent) toast('Couldn’t load sheet: ' + (e.message||'no internet')); }
 }
@@ -1019,7 +1080,7 @@ function openSheetSettings(){
     <p class="hint" style="margin-top:0">Every tab of this workbook is read each time the app opens (when online), and all product rows are combined. Barcodes you learn in the app are kept. The sheet must be shared as “Anyone with the link can view”.</p>
     <div class="field"><p class="label">Sheet link</p><input class="input" id="sheetUrlIn" value="${esc(sheetUrl)}"></div>
     <p class="hint">${lastSync ? 'Last loaded: ' + new Date(lastSync).toLocaleString() : 'Not loaded yet.'}${lastTabs.length ? '<br>Tabs with products: ' + esc(lastTabs.join(', ')) : ''}</p>
-    <div class="actions"><button class="btn" id="syncNow">Load prices now</button><button class="btn plain" id="sheetClose">Close</button></div>
+    <div class="actions"><button class="btn" id="syncNow">Load prices now</button><button class="btn ghost" id="sheetCheck">Sheet check</button><button class="btn plain" id="sheetClose">Close</button></div>
     <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
     <h2 style="font-size:16px">Write to the sheet</h2>
     <p class="hint" style="margin-top:0">With this set, learned barcodes and new or edited products are written straight into the right tab of your sheet. ${writeUrl ? '' : '<b>One-time setup needed.</b>'}${!Native ? ' <b>iPhone / web:</b> paste the setup link from the Android app here (⚙ Settings → Set up another device).' : ''}</p>
@@ -1065,6 +1126,7 @@ function openSheetSettings(){
     ls.set('ps_queue', queue); toast(`Writing ${withCodes.length} products…`); flushQueue();
   });
   $('#syncNow').addEventListener('click', async () => { sheetUrl = $('#sheetUrlIn').value.trim(); ls.set('ps_sheet', sheetUrl); closeSheet(); await syncSheet(false); });
+  $('#sheetCheck').addEventListener('click', openReport);
   $('#sheetClose').addEventListener('click', () => { sheetUrl = $('#sheetUrlIn').value.trim() || sheetUrl; ls.set('ps_sheet', sheetUrl); closeSheet(); });
   $('#pasteImport').addEventListener('click', openImport);
   $('#sheetExport').addEventListener('click', exportRows);
