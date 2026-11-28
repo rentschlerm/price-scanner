@@ -130,6 +130,13 @@ textarea.input{min-height:120px;font-family:monospace;font-size:13px}
 .instr{background:var(--brand-soft);border-radius:14px;padding:14px;margin:12px 0;font-size:15px;line-height:1.5}
 .instr b{font-size:20px}
 .summary .line{display:flex;justify-content:space-between;padding:3px 0;font-size:14px}
+
+/* ---------- Keyboard: keep the field being typed in visible ---------- */
+.sheet-bg{top:var(--vvt,0px);bottom:auto;height:var(--vvh,100%)}
+.sheet{max-height:calc(var(--vvh,100vh) - 16px)}
+body.kb-open nav, body.kb-open .posbar{display:none !important}
+body.kb-open .toast{bottom:calc(var(--kb,0px) + 12px)}
+body.kb-open .sheet{padding-bottom:16px}
 /* ---------- Tablet / wide screen: sale panel always visible on the right ---------- */
 @media (min-width: 1000px){
   main{max-width:1500px;display:grid;grid-template-columns:minmax(0,1.45fr) minmax(380px,1fr);gap:18px;align-items:start;padding-bottom:110px}
@@ -1282,6 +1289,27 @@ $('#exportBtn').addEventListener('click', exportRows);
 window.__onBack = () => { if ($('#sheetBg').classList.contains('open')){ closeSheet(); return true; } if (!$('#view-scan').classList.contains('active')){ go('scan'); return true; } return false; };
 
 if (NATIVE_CAM){ $('#cam').classList.add('native'); $('#camSub').textContent = 'Point the camera at a barcode — it scans automatically. Tap the picture to focus.'; }
+// ----- Keyboard handling (Android + iPhone) -----
+(() => {
+  const root = document.documentElement, vv = window.visualViewport;
+  let fullH = window.innerHeight, fullW = window.innerWidth;
+  const update = () => {
+    if (Math.abs(window.innerWidth - fullW) > 40){ fullW = window.innerWidth; fullH = window.innerHeight; } // rotated
+    if (!document.activeElement || !isTyping(document.activeElement)) fullH = Math.max(fullH, window.innerHeight);
+    const h = vv ? vv.height : window.innerHeight, top = vv ? vv.offsetTop : 0;
+    const kb = Math.max(0, window.innerHeight - h - top);         // iPhone: keyboard covers the page
+    const shrunk = window.innerHeight < fullH * 0.8;               // Android: the app is resized for the keyboard
+    root.style.setProperty('--vvh', h + 'px'); root.style.setProperty('--vvt', top + 'px'); root.style.setProperty('--kb', kb + 'px');
+    document.body.classList.toggle('kb-open', (kb > 80 || shrunk) && isTyping(document.activeElement));
+  };
+  const isTyping = el => el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|file|range|color)$/i.test(el.type)) || el.isContentEditable);
+  const reveal = el => { if (isTyping(el) && document.activeElement === el) el.scrollIntoView({block: 'center', behavior: 'smooth'}); };
+  document.addEventListener('focusin', e => { if (!isTyping(e.target)) return; update(); [120, 350, 700].forEach(t => setTimeout(() => { update(); reveal(e.target); }, t)); });
+  document.addEventListener('focusout', () => setTimeout(update, 150));
+  if (vv){ vv.addEventListener('resize', () => { update(); reveal(document.activeElement); }); vv.addEventListener('scroll', update); }
+  window.addEventListener('resize', () => { update(); reveal(document.activeElement); });
+  update();
+})();
 if (/#setup=/.test(location.hash)){ applySetup(location.hash); history.replaceState(null, '', location.pathname); }
 if (!Native && 'serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 setMode(scanMode);
